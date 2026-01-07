@@ -1,3 +1,5 @@
+# Copyright (c) terraform-flipt contributors
+
 resource "terraform_data" "example" {
   input = "fake-string"
 
