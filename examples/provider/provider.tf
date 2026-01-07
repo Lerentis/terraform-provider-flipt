@@ -1,5 +1,5 @@
 # Copyright (c) terraform-flipt contributors
 
-provider "scaffolding" {
+provider "flipt" {
   # example configuration here
 }
