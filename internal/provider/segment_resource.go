@@ -4,18 +4,18 @@
 package provider
 
 import (
-"context"
-"fmt"
+	"context"
+	"fmt"
 
-"github.com/hashicorp/terraform-plugin-framework/path"
-"github.com/hashicorp/terraform-plugin-framework/resource"
-"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-"github.com/hashicorp/terraform-plugin-framework/types"
-"github.com/hashicorp/terraform-plugin-log/tflog"
-sdk "go.flipt.io/flipt/sdk/go"
-flipt "go.flipt.io/flipt/rpc/flipt"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &SegmentResource{}
@@ -95,9 +95,9 @@ func (r *SegmentResource) Configure(ctx context.Context, req resource.ConfigureR
 	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
-"Unexpected Resource Configure Type",
-fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
-)
+			"Unexpected Resource Configure Type",
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+		)
 		return
 	}
 
