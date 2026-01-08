@@ -10,7 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ datasource.DataSource = &FlagDataSource{}
@@ -20,7 +21,7 @@ func NewFlagDataSource() datasource.DataSource {
 }
 
 type FlagDataSource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type FlagDataSourceModel struct {
@@ -85,11 +86,11 @@ func (d *FlagDataSource) Configure(ctx context.Context, req datasource.Configure
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
 		)
 		return
 	}
@@ -105,36 +106,35 @@ func (d *FlagDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	flag, httpResp, err := d.client.FlagsServiceAPI.GetFlag(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).Execute()
+	flag, err := d.client.Flipt().GetFlag(ctx, &flipt.GetFlagRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Flag with key '%s' not found in namespace '%s'", data.Key.ValueString(), data.NamespaceKey.ValueString()))
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Flag with key '%s' not found in namespace '%s'", data.Key.ValueString(), data.NamespaceKey.ValueString()))
 		return
 	}
 
-	data.Key = types.StringValue(flag.GetKey())
-	data.Name = types.StringValue(flag.GetName())
-	data.Enabled = types.BoolValue(flag.GetEnabled())
+	data.Key = types.StringValue(flag.Key)
+	data.Name = types.StringValue(flag.Name)
+	data.Enabled = types.BoolValue(flag.Enabled)
 
-	if desc, ok := flag.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if flag.Description != "" {
+		data.Description = types.StringValue(flag.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	if flagType, ok := flag.GetTypeOk(); ok {
-		data.Type = types.StringValue(*flagType)
+	if flag.Type != 0 {
+		data.Type = types.StringValue(flag.Type.String())
 	}
 
-	if createdAt, ok := flag.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
+	if flag.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(flag.CreatedAt.AsTime().String())
 	}
 
-	if updatedAt, ok := flag.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if flag.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

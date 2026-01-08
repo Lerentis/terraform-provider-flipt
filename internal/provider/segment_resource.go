@@ -4,17 +4,18 @@
 package provider
 
 import (
-	"context"
-	"fmt"
+"context"
+"fmt"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
-	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+"github.com/hashicorp/terraform-plugin-framework/path"
+"github.com/hashicorp/terraform-plugin-framework/resource"
+"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+"github.com/hashicorp/terraform-plugin-framework/types"
+"github.com/hashicorp/terraform-plugin-log/tflog"
+sdk "go.flipt.io/flipt/sdk/go"
+flipt "go.flipt.io/flipt/rpc/flipt"
 )
 
 var _ resource.Resource = &SegmentResource{}
@@ -25,7 +26,7 @@ func NewSegmentResource() resource.Resource {
 }
 
 type SegmentResource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type SegmentResourceModel struct {
@@ -72,6 +73,7 @@ func (r *SegmentResource) Schema(ctx context.Context, req resource.SchemaRequest
 			"match_type": schema.StringAttribute{
 				MarkdownDescription: "Match type for the segment (ALL_MATCH_TYPE or ANY_MATCH_TYPE)",
 				Optional:            true,
+				Computed:            true,
 			},
 			"created_at": schema.StringAttribute{
 				MarkdownDescription: "Timestamp when the segment was created",
@@ -90,12 +92,12 @@ func (r *SegmentResource) Configure(ctx context.Context, req resource.ConfigureR
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
-		)
+"Unexpected Resource Configure Type",
+fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+)
 		return
 	}
 
@@ -109,46 +111,45 @@ func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	matchType := "ALL_MATCH_TYPE"
-	if !data.MatchType.IsNull() {
-		matchType = data.MatchType.ValueString()
+	matchType := flipt.MatchType_ALL_MATCH_TYPE
+	if !data.MatchType.IsNull() && !data.MatchType.IsUnknown() {
+		if data.MatchType.ValueString() == "ANY_MATCH_TYPE" {
+			matchType = flipt.MatchType_ANY_MATCH_TYPE
+		}
 	}
 
-	createReq := *flipt.NewCreateSegmentRequest(data.Key.ValueString(), data.Name.ValueString(), matchType)
+	createReq := &flipt.CreateSegmentRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+		Name:         data.Name.ValueString(),
+		MatchType:    matchType,
+	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		createReq.Description = &desc
+		createReq.Description = data.Description.ValueString()
 	}
 
-	segment, httpResp, err := r.client.SegmentsServiceAPI.CreateSegment(ctx, data.NamespaceKey.ValueString()).CreateSegmentRequest(createReq).Execute()
+	segment, err := r.client.Flipt().CreateSegment(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create segment, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 && httpResp.StatusCode != 201 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create segment, got status: %d", httpResp.StatusCode))
-		return
+	data.Key = types.StringValue(segment.Key)
+	data.Name = types.StringValue(segment.Name)
+
+	if segment.Description != "" {
+		data.Description = types.StringValue(segment.Description)
 	}
 
-	data.Key = types.StringValue(segment.GetKey())
-	data.Name = types.StringValue(segment.GetName())
+	data.MatchType = types.StringValue(segment.MatchType.String())
 
-	if desc, ok := segment.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if segment.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(segment.CreatedAt.AsTime().String())
 	}
 
-	if matchType, ok := segment.GetMatchTypeOk(); ok {
-		data.MatchType = types.StringValue(*matchType)
-	}
-
-	if createdAt, ok := segment.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := segment.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if segment.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
 	}
 
 	tflog.Trace(ctx, "created a segment resource")
@@ -162,35 +163,32 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	segment, httpResp, err := r.client.SegmentsServiceAPI.GetSegment(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).Execute()
+	segment, err := r.client.Flipt().GetSegment(ctx, &flipt.GetSegmentRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			resp.State.RemoveResource(ctx)
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	data.Key = types.StringValue(segment.GetKey())
-	data.Name = types.StringValue(segment.GetName())
+	data.Key = types.StringValue(segment.Key)
+	data.Name = types.StringValue(segment.Name)
 
-	if desc, ok := segment.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if segment.Description != "" {
+		data.Description = types.StringValue(segment.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	if matchType, ok := segment.GetMatchTypeOk(); ok {
-		data.MatchType = types.StringValue(*matchType)
+	data.MatchType = types.StringValue(segment.MatchType.String())
+
+	if segment.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(segment.CreatedAt.AsTime().String())
 	}
 
-	if createdAt, ok := segment.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := segment.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if segment.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -203,41 +201,40 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	matchType := "ALL_MATCH_TYPE"
-	if !data.MatchType.IsNull() {
-		matchType = data.MatchType.ValueString()
+	matchType := flipt.MatchType_ALL_MATCH_TYPE
+	if !data.MatchType.IsNull() && !data.MatchType.IsUnknown() {
+		if data.MatchType.ValueString() == "ANY_MATCH_TYPE" {
+			matchType = flipt.MatchType_ANY_MATCH_TYPE
+		}
 	}
 
-	updateReq := *flipt.NewUpdateSegmentRequest(data.Name.ValueString(), matchType)
+	updateReq := &flipt.UpdateSegmentRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+		Name:         data.Name.ValueString(),
+		MatchType:    matchType,
+	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		updateReq.Description = &desc
+		updateReq.Description = data.Description.ValueString()
 	}
 
-	segment, httpResp, err := r.client.SegmentsServiceAPI.UpdateSegment(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).UpdateSegmentRequest(updateReq).Execute()
+	segment, err := r.client.Flipt().UpdateSegment(ctx, updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update segment, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update segment, got status: %d", httpResp.StatusCode))
-		return
+	data.Name = types.StringValue(segment.Name)
+
+	if segment.Description != "" {
+		data.Description = types.StringValue(segment.Description)
 	}
 
-	data.Name = types.StringValue(segment.GetName())
+	data.MatchType = types.StringValue(segment.MatchType.String())
 
-	if desc, ok := segment.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
-	}
-
-	if matchType, ok := segment.GetMatchTypeOk(); ok {
-		data.MatchType = types.StringValue(*matchType)
-	}
-
-	if updatedAt, ok := segment.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if segment.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -250,14 +247,12 @@ func (r *SegmentResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	httpResp, err := r.client.SegmentsServiceAPI.DeleteSegment(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).Execute()
+	err := r.client.Flipt().DeleteSegment(ctx, &flipt.DeleteSegmentRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete segment, got error: %s", err))
-		return
-	}
-
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete segment, got status: %d", httpResp.StatusCode))
 		return
 	}
 

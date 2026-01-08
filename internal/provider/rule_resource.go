@@ -14,7 +14,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &RuleResource{}
@@ -25,7 +26,7 @@ func NewRuleResource() resource.Resource {
 }
 
 type RuleResource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type RuleResourceModel struct {
@@ -94,11 +95,11 @@ func (r *RuleResource) Configure(ctx context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
 		)
 		return
 	}
@@ -118,34 +119,29 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		rank = int32(data.Rank.ValueInt64())
 	}
 
-	createReq := *flipt.NewCreateRuleRequest(rank)
-	segmentKey := data.SegmentKey.ValueString()
-	createReq.SegmentKey = &segmentKey
+	createReq := &flipt.CreateRuleRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+		SegmentKey:   data.SegmentKey.ValueString(),
+		Rank:         rank,
+	}
 
-	rule, httpResp, err := r.client.RulesServiceAPI.CreateRule(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString()).CreateRuleRequest(createReq).Execute()
+	rule, err := r.client.Flipt().CreateRule(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create rule, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 && httpResp.StatusCode != 201 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create rule, got status: %d", httpResp.StatusCode))
-		return
+	data.ID = types.StringValue(rule.Id)
+	data.SegmentKey = types.StringValue(rule.SegmentKey)
+	data.Rank = types.Int64Value(int64(rule.Rank))
+
+	if rule.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(rule.CreatedAt.AsTime().String())
 	}
 
-	data.ID = types.StringValue(rule.GetId())
-	data.SegmentKey = types.StringValue(rule.GetSegmentKey())
-
-	if rank, ok := rule.GetRankOk(); ok {
-		data.Rank = types.Int64Value(int64(*rank))
-	}
-
-	if createdAt, ok := rule.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := rule.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if rule.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(rule.UpdatedAt.AsTime().String())
 	}
 
 	tflog.Trace(ctx, "created a rule resource")
@@ -159,28 +155,38 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	rule, httpResp, err := r.client.RulesServiceAPI.GetRule(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString(), data.ID.ValueString()).Execute()
+	rulesResp, err := r.client.Flipt().ListRules(ctx, &flipt.ListRuleRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			resp.State.RemoveResource(ctx)
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read rule, got error: %s", err))
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	data.SegmentKey = types.StringValue(rule.GetSegmentKey())
-
-	if rank, ok := rule.GetRankOk(); ok {
-		data.Rank = types.Int64Value(int64(*rank))
+	// Find the rule in the rules list
+	var foundRule *flipt.Rule
+	for _, rule := range rulesResp.Rules {
+		if rule.Id == data.ID.ValueString() {
+			foundRule = rule
+			break
+		}
 	}
 
-	if createdAt, ok := rule.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
+	if foundRule == nil {
+		resp.State.RemoveResource(ctx)
+		return
 	}
 
-	if updatedAt, ok := rule.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	data.SegmentKey = types.StringValue(foundRule.SegmentKey)
+	data.Rank = types.Int64Value(int64(foundRule.Rank))
+
+	if foundRule.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(foundRule.CreatedAt.AsTime().String())
+	}
+
+	if foundRule.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(foundRule.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -193,29 +199,24 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	updateReq := *flipt.NewUpdateRuleRequest()
-	segmentKey := data.SegmentKey.ValueString()
-	updateReq.SegmentKey = &segmentKey
+	updateReq := &flipt.UpdateRuleRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+		Id:           data.ID.ValueString(),
+		SegmentKey:   data.SegmentKey.ValueString(),
+	}
 
-	rule, httpResp, err := r.client.RulesServiceAPI.UpdateRule(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString(), data.ID.ValueString()).UpdateRuleRequest(updateReq).Execute()
+	rule, err := r.client.Flipt().UpdateRule(ctx, updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update rule, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update rule, got status: %d", httpResp.StatusCode))
-		return
-	}
+	data.SegmentKey = types.StringValue(rule.SegmentKey)
+	data.Rank = types.Int64Value(int64(rule.Rank))
 
-	data.SegmentKey = types.StringValue(rule.GetSegmentKey())
-
-	if rank, ok := rule.GetRankOk(); ok {
-		data.Rank = types.Int64Value(int64(*rank))
-	}
-
-	if updatedAt, ok := rule.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if rule.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(rule.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -228,14 +229,13 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	httpResp, err := r.client.RulesServiceAPI.DeleteRule(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString(), data.ID.ValueString()).Execute()
+	err := r.client.Flipt().DeleteRule(ctx, &flipt.DeleteRuleRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+		Id:           data.ID.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete rule, got error: %s", err))
-		return
-	}
-
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete rule, got status: %d", httpResp.StatusCode))
 		return
 	}
 

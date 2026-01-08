@@ -74,23 +74,6 @@ resource "flipt_rule" "beta_ui_rule" {
   rank          = 1
 }
 
-# Create distributions for the rule
-resource "flipt_distribution" "blue_dist" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.new_ui.key
-  rule_id       = flipt_rule.beta_ui_rule.id
-  variant_id    = flipt_variant.ui_blue.id
-  rollout       = 70.0
-}
-
-resource "flipt_distribution" "green_dist" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.new_ui.key
-  rule_id       = flipt_rule.beta_ui_rule.id
-  variant_id    = flipt_variant.ui_green.id
-  rollout       = 30.0
-}
-
 # Boolean flag example
 resource "flipt_flag" "maintenance_mode" {
   namespace_key = flipt_namespace.production.key

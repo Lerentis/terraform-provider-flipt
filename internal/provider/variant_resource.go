@@ -14,7 +14,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &VariantResource{}
@@ -25,7 +26,7 @@ func NewVariantResource() resource.Resource {
 }
 
 type VariantResource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type VariantResourceModel struct {
@@ -103,11 +104,11 @@ func (r *VariantResource) Configure(ctx context.Context, req resource.ConfigureR
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
 		)
 		return
 	}
@@ -122,55 +123,51 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	createReq := *flipt.NewCreateVariantRequest(data.Key.ValueString())
+	createReq := &flipt.CreateVariantRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	}
 
 	if !data.Name.IsNull() {
-		name := data.Name.ValueString()
-		createReq.Name = &name
+		createReq.Name = data.Name.ValueString()
 	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		createReq.Description = &desc
+		createReq.Description = data.Description.ValueString()
 	}
 
 	if !data.Attachment.IsNull() {
-		attachment := data.Attachment.ValueString()
-		createReq.Attachment = &attachment
+		createReq.Attachment = data.Attachment.ValueString()
 	}
 
-	variant, httpResp, err := r.client.VariantsServiceAPI.CreateVariant(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString()).CreateVariantRequest(createReq).Execute()
+	variant, err := r.client.Flipt().CreateVariant(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create variant, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 && httpResp.StatusCode != 201 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create variant, got status: %d", httpResp.StatusCode))
-		return
+	data.ID = types.StringValue(variant.Id)
+	data.Key = types.StringValue(variant.Key)
+
+	if variant.Name != "" {
+		data.Name = types.StringValue(variant.Name)
 	}
 
-	data.ID = types.StringValue(variant.GetId())
-	data.Key = types.StringValue(variant.GetKey())
-
-	if name, ok := variant.GetNameOk(); ok {
-		data.Name = types.StringValue(*name)
+	if variant.Description != "" {
+		data.Description = types.StringValue(variant.Description)
 	}
 
-	if desc, ok := variant.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if variant.Attachment != "" {
+		data.Attachment = types.StringValue(variant.Attachment)
 	}
 
-	if attachment, ok := variant.GetAttachmentOk(); ok {
-		data.Attachment = types.StringValue(*attachment)
+	if variant.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(variant.CreatedAt.AsTime().String())
 	}
 
-	if createdAt, ok := variant.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := variant.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if variant.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(variant.UpdatedAt.AsTime().String())
 	}
 
 	tflog.Trace(ctx, "created a variant resource")
@@ -184,11 +181,57 @@ func (r *VariantResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	// Note: Variants don't have a direct Get endpoint, we need to list and find
-	// For now, we'll just trust the state is accurate
-	// A production implementation might want to list all variants and find the matching one
+	flag, err := r.client.Flipt().GetFlag(ctx, &flipt.GetFlagRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.FlagKey.ValueString(),
+	})
+	if err != nil {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 
-	tflog.Trace(ctx, "read a variant resource")
+	// Find the variant in the flag's variants list
+	var foundVariant *flipt.Variant
+	for _, v := range flag.Variants {
+		if v.Id == data.ID.ValueString() {
+			foundVariant = v
+			break
+		}
+	}
+
+	if foundVariant == nil {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	data.Key = types.StringValue(foundVariant.Key)
+
+	if foundVariant.Name != "" {
+		data.Name = types.StringValue(foundVariant.Name)
+	} else {
+		data.Name = types.StringNull()
+	}
+
+	if foundVariant.Description != "" {
+		data.Description = types.StringValue(foundVariant.Description)
+	} else {
+		data.Description = types.StringNull()
+	}
+
+	if foundVariant.Attachment != "" {
+		data.Attachment = types.StringValue(foundVariant.Attachment)
+	} else {
+		data.Attachment = types.StringNull()
+	}
+
+	if foundVariant.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(foundVariant.CreatedAt.AsTime().String())
+	}
+
+	if foundVariant.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(foundVariant.UpdatedAt.AsTime().String())
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -199,50 +242,47 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	updateReq := *flipt.NewUpdateVariantRequest(data.Key.ValueString())
+	updateReq := &flipt.UpdateVariantRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+		Id:           data.ID.ValueString(),
+		Key:          data.Key.ValueString(),
+	}
 
 	if !data.Name.IsNull() {
-		name := data.Name.ValueString()
-		updateReq.Name = &name
+		updateReq.Name = data.Name.ValueString()
 	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		updateReq.Description = &desc
+		updateReq.Description = data.Description.ValueString()
 	}
 
 	if !data.Attachment.IsNull() {
-		attachment := data.Attachment.ValueString()
-		updateReq.Attachment = &attachment
+		updateReq.Attachment = data.Attachment.ValueString()
 	}
 
-	variant, httpResp, err := r.client.VariantsServiceAPI.UpdateVariant(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString(), data.ID.ValueString()).UpdateVariantRequest(updateReq).Execute()
+	variant, err := r.client.Flipt().UpdateVariant(ctx, updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update variant, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update variant, got status: %d", httpResp.StatusCode))
-		return
+	data.Key = types.StringValue(variant.Key)
+
+	if variant.Name != "" {
+		data.Name = types.StringValue(variant.Name)
 	}
 
-	data.Key = types.StringValue(variant.GetKey())
-
-	if name, ok := variant.GetNameOk(); ok {
-		data.Name = types.StringValue(*name)
+	if variant.Description != "" {
+		data.Description = types.StringValue(variant.Description)
 	}
 
-	if desc, ok := variant.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if variant.Attachment != "" {
+		data.Attachment = types.StringValue(variant.Attachment)
 	}
 
-	if attachment, ok := variant.GetAttachmentOk(); ok {
-		data.Attachment = types.StringValue(*attachment)
-	}
-
-	if updatedAt, ok := variant.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if variant.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(variant.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -255,14 +295,13 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	httpResp, err := r.client.VariantsServiceAPI.DeleteVariant(ctx, data.NamespaceKey.ValueString(), data.FlagKey.ValueString(), data.ID.ValueString()).Execute()
+	err := r.client.Flipt().DeleteVariant(ctx, &flipt.DeleteVariantRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		FlagKey:      data.FlagKey.ValueString(),
+		Id:           data.ID.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete variant, got error: %s", err))
-		return
-	}
-
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete variant, got status: %d", httpResp.StatusCode))
 		return
 	}
 

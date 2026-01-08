@@ -11,7 +11,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	sdk "go.flipt.io/flipt/sdk/go"
+	sdkhttp "go.flipt.io/flipt/sdk/go/http"
 )
 
 // Ensure FliptProvider satisfies various provider interfaces.
@@ -64,19 +65,12 @@ func (p *FliptProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	// Create Flipt SDK client configuration
-	cfg := flipt.NewConfiguration()
-	cfg.Servers = flipt.ServerConfigurations{
-		{
-			URL: data.Endpoint.ValueString(),
-		},
-	}
+	// Create Flipt SDK client using HTTP transport
+	transport := sdkhttp.NewTransport(data.Endpoint.ValueString())
+	client := sdk.New(transport)
 
-	// Create Flipt API client
-	client := flipt.NewAPIClient(cfg)
-
-	resp.DataSourceData = client
-	resp.ResourceData = client
+	resp.DataSourceData = &client
+	resp.ResourceData = &client
 }
 
 func (p *FliptProvider) Resources(ctx context.Context) []func() resource.Resource {

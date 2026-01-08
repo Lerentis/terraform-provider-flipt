@@ -14,7 +14,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces.
@@ -27,7 +28,7 @@ func NewNamespaceResource() resource.Resource {
 
 // NamespaceResource defines the resource implementation.
 type NamespaceResource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 // NamespaceResourceModel describes the resource data model.
@@ -87,12 +88,12 @@ func (r *NamespaceResource) Configure(ctx context.Context, req resource.Configur
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
@@ -112,43 +113,38 @@ func (r *NamespaceResource) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	// Create the namespace using the Flipt SDK
-	createReq := *flipt.NewCreateNamespaceRequest(data.Key.ValueString(), data.Name.ValueString())
-
-	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		createReq.Description = &desc
+	createReq := &flipt.CreateNamespaceRequest{
+		Key:  data.Key.ValueString(),
+		Name: data.Name.ValueString(),
 	}
 
-	namespace, httpResp, err := r.client.NamespacesServiceAPI.CreateNamespace(ctx).CreateNamespaceRequest(createReq).Execute()
+	if !data.Description.IsNull() {
+		createReq.Description = data.Description.ValueString()
+	}
+
+	namespace, err := r.client.Flipt().CreateNamespace(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create namespace, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 && httpResp.StatusCode != 201 {
-		resp.Diagnostics.AddError(
-			"API Error",
-			fmt.Sprintf("Unable to create namespace, got status: %d", httpResp.StatusCode),
-		)
-		return
-	}
-	data.Key = types.StringValue(namespace.GetKey())
-	data.Name = types.StringValue(namespace.GetName())
+	data.Key = types.StringValue(namespace.Key)
+	data.Name = types.StringValue(namespace.Name)
 
-	if desc, ok := namespace.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if namespace.Description != "" {
+		data.Description = types.StringValue(namespace.Description)
 	}
 
-	if protected, ok := namespace.GetProtectedOk(); ok {
-		data.Protected = types.BoolValue(*protected)
+	if namespace.Protected {
+		data.Protected = types.BoolValue(namespace.Protected)
 	}
 
-	if createdAt, ok := namespace.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
+	if namespace.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(namespace.CreatedAt.AsTime().String())
 	}
 
-	if updatedAt, ok := namespace.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if namespace.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(namespace.UpdatedAt.AsTime().String())
 	}
 
 	tflog.Trace(ctx, "created a namespace resource")
@@ -168,43 +164,34 @@ func (r *NamespaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	// Get the namespace from Flipt
-	namespace, httpResp, err := r.client.NamespacesServiceAPI.GetNamespace(ctx, data.Key.ValueString()).Execute()
+	namespace, err := r.client.Flipt().GetNamespace(ctx, &flipt.GetNamespaceRequest{
+		Key: data.Key.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			// Namespace no longer exists
-			resp.State.RemoveResource(ctx)
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read namespace, got error: %s", err))
+		// Namespace no longer exists
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError(
-			"API Error",
-			fmt.Sprintf("Unable to read namespace, got status: %d", httpResp.StatusCode),
-		)
-		return
-	}
-	data.Key = types.StringValue(namespace.GetKey())
-	data.Name = types.StringValue(namespace.GetName())
+	data.Key = types.StringValue(namespace.Key)
+	data.Name = types.StringValue(namespace.Name)
 
-	if desc, ok := namespace.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if namespace.Description != "" {
+		data.Description = types.StringValue(namespace.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	if protected, ok := namespace.GetProtectedOk(); ok {
-		data.Protected = types.BoolValue(*protected)
+	if namespace.Protected {
+		data.Protected = types.BoolValue(namespace.Protected)
 	}
 
-	if createdAt, ok := namespace.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
+	if namespace.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(namespace.CreatedAt.AsTime().String())
 	}
 
-	if updatedAt, ok := namespace.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if namespace.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(namespace.UpdatedAt.AsTime().String())
 	}
 
 	// Save updated data into Terraform state
@@ -222,38 +209,33 @@ func (r *NamespaceResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	// Update the namespace using the Flipt SDK
-	updateReq := *flipt.NewUpdateNamespaceRequest(data.Name.ValueString())
-
-	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		updateReq.Description = &desc
+	updateReq := &flipt.UpdateNamespaceRequest{
+		Key:  data.Key.ValueString(),
+		Name: data.Name.ValueString(),
 	}
 
-	namespace, httpResp, err := r.client.NamespacesServiceAPI.UpdateNamespace(ctx, data.Key.ValueString()).UpdateNamespaceRequest(updateReq).Execute()
+	if !data.Description.IsNull() {
+		updateReq.Description = data.Description.ValueString()
+	}
+
+	namespace, err := r.client.Flipt().UpdateNamespace(ctx, updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update namespace, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError(
-			"API Error",
-			fmt.Sprintf("Unable to update namespace, got status: %d", httpResp.StatusCode),
-		)
-		return
-	}
-	data.Name = types.StringValue(namespace.GetName())
+	data.Name = types.StringValue(namespace.Name)
 
-	if desc, ok := namespace.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if namespace.Description != "" {
+		data.Description = types.StringValue(namespace.Description)
 	}
 
-	if protected, ok := namespace.GetProtectedOk(); ok {
-		data.Protected = types.BoolValue(*protected)
+	if namespace.Protected {
+		data.Protected = types.BoolValue(namespace.Protected)
 	}
 
-	if updatedAt, ok := namespace.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if namespace.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(namespace.UpdatedAt.AsTime().String())
 	}
 
 	// Save updated data into Terraform state
@@ -271,17 +253,11 @@ func (r *NamespaceResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 
 	// Delete the namespace using the Flipt SDK
-	httpResp, err := r.client.NamespacesServiceAPI.DeleteNamespace(ctx, data.Key.ValueString()).Execute()
+	err := r.client.Flipt().DeleteNamespace(ctx, &flipt.DeleteNamespaceRequest{
+		Key: data.Key.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete namespace, got error: %s", err))
-		return
-	}
-
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError(
-			"API Error",
-			fmt.Sprintf("Unable to delete namespace, got status: %d", httpResp.StatusCode),
-		)
 		return
 	}
 

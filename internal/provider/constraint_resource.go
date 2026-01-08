@@ -14,7 +14,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &ConstraintResource{}
@@ -25,7 +26,7 @@ func NewConstraintResource() resource.Resource {
 }
 
 type ConstraintResource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type ConstraintResourceModel struct {
@@ -108,11 +109,11 @@ func (r *ConstraintResource) Configure(ctx context.Context, req resource.Configu
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
 		)
 		return
 	}
@@ -127,48 +128,56 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	createReq := *flipt.NewCreateConstraintRequest(data.Type.ValueString(), data.Property.ValueString(), data.Operator.ValueString())
+	createReq := &flipt.CreateConstraintRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		SegmentKey:   data.SegmentKey.ValueString(),
+		Property:     data.Property.ValueString(),
+		Operator:     data.Operator.ValueString(),
+	}
+
+	// Handle Type field - it's a ComparisonType enum
+	if !data.Type.IsNull() {
+		typeStr := data.Type.ValueString()
+		if typeVal, ok := flipt.ComparisonType_value[typeStr]; ok {
+			createReq.Type = flipt.ComparisonType(typeVal)
+		}
+	}
 
 	if !data.Value.IsNull() {
-		value := data.Value.ValueString()
-		createReq.Value = &value
+		createReq.Value = data.Value.ValueString()
 	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		createReq.Description = &desc
+		createReq.Description = data.Description.ValueString()
 	}
 
-	constraint, httpResp, err := r.client.ConstraintsServiceAPI.CreateConstraint(ctx, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString()).CreateConstraintRequest(createReq).Execute()
+	constraint, err := r.client.Flipt().CreateConstraint(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create constraint, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 && httpResp.StatusCode != 201 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create constraint, got status: %d", httpResp.StatusCode))
-		return
+	data.ID = types.StringValue(constraint.Id)
+	if constraint.Type != 0 {
+		data.Type = types.StringValue(constraint.Type.String())
+	}
+	data.Property = types.StringValue(constraint.Property)
+	data.Operator = types.StringValue(constraint.Operator)
+
+	if constraint.Value != "" {
+		data.Value = types.StringValue(constraint.Value)
 	}
 
-	data.ID = types.StringValue(constraint.GetId())
-	data.Type = types.StringValue(constraint.GetType())
-	data.Property = types.StringValue(constraint.GetProperty())
-	data.Operator = types.StringValue(constraint.GetOperator())
-
-	if value, ok := constraint.GetValueOk(); ok {
-		data.Value = types.StringValue(*value)
+	if constraint.Description != "" {
+		data.Description = types.StringValue(constraint.Description)
 	}
 
-	if desc, ok := constraint.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if constraint.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(constraint.CreatedAt.AsTime().String())
 	}
 
-	if createdAt, ok := constraint.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := constraint.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if constraint.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(constraint.UpdatedAt.AsTime().String())
 	}
 
 	tflog.Trace(ctx, "created a constraint resource")
@@ -182,9 +191,55 @@ func (r *ConstraintResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	// Note: Constraints don't have a direct Get endpoint
-	// A production implementation might want to list all constraints and find the matching one
-	tflog.Trace(ctx, "read a constraint resource")
+	segment, err := r.client.Flipt().GetSegment(ctx, &flipt.GetSegmentRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.SegmentKey.ValueString(),
+	})
+	if err != nil {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	// Find the constraint in the segment's constraints list
+	var foundConstraint *flipt.Constraint
+	for _, c := range segment.Constraints {
+		if c.Id == data.ID.ValueString() {
+			foundConstraint = c
+			break
+		}
+	}
+
+	if foundConstraint == nil {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+
+	if foundConstraint.Type != 0 {
+		data.Type = types.StringValue(foundConstraint.Type.String())
+	}
+	data.Property = types.StringValue(foundConstraint.Property)
+	data.Operator = types.StringValue(foundConstraint.Operator)
+
+	if foundConstraint.Value != "" {
+		data.Value = types.StringValue(foundConstraint.Value)
+	} else {
+		data.Value = types.StringNull()
+	}
+
+	if foundConstraint.Description != "" {
+		data.Description = types.StringValue(foundConstraint.Description)
+	} else {
+		data.Description = types.StringNull()
+	}
+
+	if foundConstraint.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(foundConstraint.CreatedAt.AsTime().String())
+	}
+
+	if foundConstraint.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(foundConstraint.UpdatedAt.AsTime().String())
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -195,43 +250,52 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	updateReq := *flipt.NewUpdateConstraintRequest(data.Type.ValueString(), data.Property.ValueString(), data.Operator.ValueString())
+	updateReq := &flipt.UpdateConstraintRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		SegmentKey:   data.SegmentKey.ValueString(),
+		Id:           data.ID.ValueString(),
+		Property:     data.Property.ValueString(),
+		Operator:     data.Operator.ValueString(),
+	}
+
+	// Handle Type field - it's a ComparisonType enum
+	if !data.Type.IsNull() {
+		typeStr := data.Type.ValueString()
+		if typeVal, ok := flipt.ComparisonType_value[typeStr]; ok {
+			updateReq.Type = flipt.ComparisonType(typeVal)
+		}
+	}
 
 	if !data.Value.IsNull() {
-		value := data.Value.ValueString()
-		updateReq.Value = &value
+		updateReq.Value = data.Value.ValueString()
 	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		updateReq.Description = &desc
+		updateReq.Description = data.Description.ValueString()
 	}
 
-	constraint, httpResp, err := r.client.ConstraintsServiceAPI.UpdateConstraint(ctx, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString(), data.ID.ValueString()).UpdateConstraintRequest(updateReq).Execute()
+	constraint, err := r.client.Flipt().UpdateConstraint(ctx, updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update constraint, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update constraint, got status: %d", httpResp.StatusCode))
-		return
+	if constraint.Type != 0 {
+		data.Type = types.StringValue(constraint.Type.String())
+	}
+	data.Property = types.StringValue(constraint.Property)
+	data.Operator = types.StringValue(constraint.Operator)
+
+	if constraint.Value != "" {
+		data.Value = types.StringValue(constraint.Value)
 	}
 
-	data.Type = types.StringValue(constraint.GetType())
-	data.Property = types.StringValue(constraint.GetProperty())
-	data.Operator = types.StringValue(constraint.GetOperator())
-
-	if value, ok := constraint.GetValueOk(); ok {
-		data.Value = types.StringValue(*value)
+	if constraint.Description != "" {
+		data.Description = types.StringValue(constraint.Description)
 	}
 
-	if desc, ok := constraint.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
-	}
-
-	if updatedAt, ok := constraint.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if constraint.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(constraint.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -244,14 +308,13 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	httpResp, err := r.client.ConstraintsServiceAPI.DeleteConstraint(ctx, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString(), data.ID.ValueString()).Execute()
+	err := r.client.Flipt().DeleteConstraint(ctx, &flipt.DeleteConstraintRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		SegmentKey:   data.SegmentKey.ValueString(),
+		Id:           data.ID.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete constraint, got error: %s", err))
-		return
-	}
-
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete constraint, got status: %d", httpResp.StatusCode))
 		return
 	}
 

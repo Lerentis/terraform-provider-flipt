@@ -4,17 +4,18 @@
 package provider
 
 import (
-	"context"
-	"fmt"
+"context"
+"fmt"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
-	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+"github.com/hashicorp/terraform-plugin-framework/path"
+"github.com/hashicorp/terraform-plugin-framework/resource"
+"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+"github.com/hashicorp/terraform-plugin-framework/types"
+"github.com/hashicorp/terraform-plugin-log/tflog"
+sdk "go.flipt.io/flipt/sdk/go"
+flipt "go.flipt.io/flipt/rpc/flipt"
 )
 
 var _ resource.Resource = &FlagResource{}
@@ -25,7 +26,7 @@ func NewFlagResource() resource.Resource {
 }
 
 type FlagResource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type FlagResourceModel struct {
@@ -72,7 +73,8 @@ func (r *FlagResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 			},
 			"enabled": schema.BoolAttribute{
 				MarkdownDescription: "Whether the flag is enabled",
-				Required:            true,
+				Optional:            true,
+				Computed:            true,
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Type of the flag (VARIANT_FLAG_TYPE or BOOLEAN_FLAG_TYPE)",
@@ -96,12 +98,12 @@ func (r *FlagResource) Configure(ctx context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
-		)
+"Unexpected Resource Configure Type",
+fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+)
 		return
 	}
 
@@ -115,49 +117,47 @@ func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	flagType := "VARIANT_FLAG_TYPE"
-	if !data.Type.IsNull() {
-		flagType = data.Type.ValueString()
+	flagType := flipt.FlagType_VARIANT_FLAG_TYPE
+	if !data.Type.IsNull() && !data.Type.IsUnknown() {
+		if data.Type.ValueString() == "BOOLEAN_FLAG_TYPE" {
+			flagType = flipt.FlagType_BOOLEAN_FLAG_TYPE
+		}
 	}
 
-	createReq := *flipt.NewCreateFlagRequest(data.Key.ValueString(), data.Name.ValueString(), flagType)
-	enabled := data.Enabled.ValueBool()
-	createReq.Enabled = &enabled
+	createReq := &flipt.CreateFlagRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+		Name:         data.Name.ValueString(),
+		Type:         flagType,
+		Enabled:      data.Enabled.ValueBool(),
+	}
 
 	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		createReq.Description = &desc
+		createReq.Description = data.Description.ValueString()
 	}
 
-	flag, httpResp, err := r.client.FlagsServiceAPI.CreateFlag(ctx, data.NamespaceKey.ValueString()).CreateFlagRequest(createReq).Execute()
+	flag, err := r.client.Flipt().CreateFlag(ctx, createReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create flag, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 && httpResp.StatusCode != 201 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create flag, got status: %d", httpResp.StatusCode))
-		return
+	data.Key = types.StringValue(flag.Key)
+	data.Name = types.StringValue(flag.Name)
+	data.Enabled = types.BoolValue(flag.Enabled)
+
+	if flag.Description != "" {
+		data.Description = types.StringValue(flag.Description)
 	}
 
-	data.Key = types.StringValue(flag.GetKey())
-	data.Name = types.StringValue(flag.GetName())
-	data.Enabled = types.BoolValue(flag.GetEnabled())
+	data.Type = types.StringValue(flag.Type.String())
 
-	if desc, ok := flag.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if flag.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(flag.CreatedAt.AsTime().String())
 	}
 
-	if flagType, ok := flag.GetTypeOk(); ok {
-		data.Type = types.StringValue(*flagType)
-	}
-
-	if createdAt, ok := flag.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := flag.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if flag.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
 	}
 
 	tflog.Trace(ctx, "created a flag resource")
@@ -171,36 +171,33 @@ func (r *FlagResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	flag, httpResp, err := r.client.FlagsServiceAPI.GetFlag(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).Execute()
+	flag, err := r.client.Flipt().GetFlag(ctx, &flipt.GetFlagRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			resp.State.RemoveResource(ctx)
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	data.Key = types.StringValue(flag.GetKey())
-	data.Name = types.StringValue(flag.GetName())
-	data.Enabled = types.BoolValue(flag.GetEnabled())
+	data.Key = types.StringValue(flag.Key)
+	data.Name = types.StringValue(flag.Name)
+	data.Enabled = types.BoolValue(flag.Enabled)
 
-	if desc, ok := flag.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if flag.Description != "" {
+		data.Description = types.StringValue(flag.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	if flagType, ok := flag.GetTypeOk(); ok {
-		data.Type = types.StringValue(*flagType)
+	data.Type = types.StringValue(flag.Type.String())
+
+	if flag.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(flag.CreatedAt.AsTime().String())
 	}
 
-	if createdAt, ok := flag.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := flag.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if flag.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -213,35 +210,34 @@ func (r *FlagResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	updateReq := *flipt.NewUpdateFlagRequest(data.Name.ValueString())
-	enabled := data.Enabled.ValueBool()
-	updateReq.Enabled = &enabled
-
-	if !data.Description.IsNull() {
-		desc := data.Description.ValueString()
-		updateReq.Description = &desc
+	updateReq := &flipt.UpdateFlagRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+		Name:         data.Name.ValueString(),
+		Enabled:      data.Enabled.ValueBool(),
 	}
 
-	flag, httpResp, err := r.client.FlagsServiceAPI.UpdateFlag(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).UpdateFlagRequest(updateReq).Execute()
+	if !data.Description.IsNull() {
+		updateReq.Description = data.Description.ValueString()
+	}
+
+	flag, err := r.client.Flipt().UpdateFlag(ctx, updateReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update flag, got error: %s", err))
 		return
 	}
 
-	if httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update flag, got status: %d", httpResp.StatusCode))
-		return
+	data.Name = types.StringValue(flag.Name)
+	data.Enabled = types.BoolValue(flag.Enabled)
+
+	if flag.Description != "" {
+		data.Description = types.StringValue(flag.Description)
 	}
 
-	data.Name = types.StringValue(flag.GetName())
-	data.Enabled = types.BoolValue(flag.GetEnabled())
+	data.Type = types.StringValue(flag.Type.String())
 
-	if desc, ok := flag.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
-	}
-
-	if updatedAt, ok := flag.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if flag.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -254,14 +250,12 @@ func (r *FlagResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	httpResp, err := r.client.FlagsServiceAPI.DeleteFlag(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).Execute()
+	err := r.client.Flipt().DeleteFlag(ctx, &flipt.DeleteFlagRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete flag, got error: %s", err))
-		return
-	}
-
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 200 {
-		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete flag, got status: %d", httpResp.StatusCode))
 		return
 	}
 

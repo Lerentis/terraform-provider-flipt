@@ -10,7 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ datasource.DataSource = &NamespaceDataSource{}
@@ -20,7 +21,7 @@ func NewNamespaceDataSource() datasource.DataSource {
 }
 
 type NamespaceDataSource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type NamespaceDataSourceModel struct {
@@ -75,11 +76,11 @@ func (d *NamespaceDataSource) Configure(ctx context.Context, req datasource.Conf
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
 		)
 		return
 	}
@@ -95,35 +96,33 @@ func (d *NamespaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	namespace, httpResp, err := d.client.NamespacesServiceAPI.GetNamespace(ctx, data.Key.ValueString()).Execute()
+	namespace, err := d.client.Flipt().GetNamespace(ctx, &flipt.GetNamespaceRequest{
+		Key: data.Key.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Namespace with key '%s' not found", data.Key.ValueString()))
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read namespace, got error: %s", err))
+		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Namespace with key '%s' not found", data.Key.ValueString()))
 		return
 	}
 
-	data.Key = types.StringValue(namespace.GetKey())
-	data.Name = types.StringValue(namespace.GetName())
+	data.Key = types.StringValue(namespace.Key)
+	data.Name = types.StringValue(namespace.Name)
 
-	if desc, ok := namespace.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if namespace.Description != "" {
+		data.Description = types.StringValue(namespace.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	if protected, ok := namespace.GetProtectedOk(); ok {
-		data.Protected = types.BoolValue(*protected)
+	if namespace.Protected {
+		data.Protected = types.BoolValue(namespace.Protected)
 	}
 
-	if createdAt, ok := namespace.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
+	if namespace.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(namespace.CreatedAt.AsTime().String())
 	}
 
-	if updatedAt, ok := namespace.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if namespace.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(namespace.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

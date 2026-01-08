@@ -10,7 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	flipt "github.com/lerentis/flipt-server-rest-sdk-go/generated"
+	flipt "go.flipt.io/flipt/rpc/flipt"
+	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ datasource.DataSource = &SegmentDataSource{}
@@ -20,7 +21,7 @@ func NewSegmentDataSource() datasource.DataSource {
 }
 
 type SegmentDataSource struct {
-	client *flipt.APIClient
+	client *sdk.SDK
 }
 
 type SegmentDataSourceModel struct {
@@ -80,11 +81,11 @@ func (d *SegmentDataSource) Configure(ctx context.Context, req datasource.Config
 		return
 	}
 
-	client, ok := req.ProviderData.(*flipt.APIClient)
+	client, ok := req.ProviderData.(*sdk.SDK)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *flipt.APIClient, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
 		)
 		return
 	}
@@ -100,35 +101,32 @@ func (d *SegmentDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	segment, httpResp, err := d.client.SegmentsServiceAPI.GetSegment(ctx, data.NamespaceKey.ValueString(), data.Key.ValueString()).Execute()
+	segment, err := d.client.Flipt().GetSegment(ctx, &flipt.GetSegmentRequest{
+		NamespaceKey: data.NamespaceKey.ValueString(),
+		Key:          data.Key.ValueString(),
+	})
 	if err != nil {
-		if httpResp != nil && httpResp.StatusCode == 404 {
-			resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Segment with key '%s' not found in namespace '%s'", data.Key.ValueString(), data.NamespaceKey.ValueString()))
-			return
-		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
+		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Segment with key '%s' not found in namespace '%s'", data.Key.ValueString(), data.NamespaceKey.ValueString()))
 		return
 	}
 
-	data.Key = types.StringValue(segment.GetKey())
-	data.Name = types.StringValue(segment.GetName())
+	data.Key = types.StringValue(segment.Key)
+	data.Name = types.StringValue(segment.Name)
 
-	if desc, ok := segment.GetDescriptionOk(); ok {
-		data.Description = types.StringValue(*desc)
+	if segment.Description != "" {
+		data.Description = types.StringValue(segment.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	if matchType, ok := segment.GetMatchTypeOk(); ok {
-		data.MatchType = types.StringValue(*matchType)
+	data.MatchType = types.StringValue(segment.MatchType.String())
+
+	if segment.CreatedAt != nil {
+		data.CreatedAt = types.StringValue(segment.CreatedAt.AsTime().String())
 	}
 
-	if createdAt, ok := segment.GetCreatedAtOk(); ok {
-		data.CreatedAt = types.StringValue(createdAt.String())
-	}
-
-	if updatedAt, ok := segment.GetUpdatedAtOk(); ok {
-		data.UpdatedAt = types.StringValue(updatedAt.String())
+	if segment.UpdatedAt != nil {
+		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

@@ -17,7 +17,6 @@ Flipt flag resource
 
 ### Required
 
-- `enabled` (Boolean) Whether the flag is enabled
 - `key` (String) Unique key for the flag
 - `name` (String) Display name of the flag
 - `namespace_key` (String) Namespace key where the flag belongs
@@ -25,6 +24,7 @@ Flipt flag resource
 ### Optional
 
 - `description` (String) Description of the flag
+- `enabled` (Boolean) Whether the flag is enabled
 - `type` (String) Type of the flag (VARIANT_FLAG_TYPE or BOOLEAN_FLAG_TYPE)
 
 ### Read-Only
