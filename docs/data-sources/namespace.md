@@ -19,10 +19,12 @@ Flipt namespace data source
 
 - `key` (String) Unique key for the namespace
 
+### Optional
+
+- `environment_key` (String) Environment key (defaults to 'default')
+
 ### Read-Only
 
-- `created_at` (String) Timestamp when the namespace was created
 - `description` (String) Description of the namespace
 - `name` (String) Display name of the namespace
 - `protected` (Boolean) Whether the namespace is protected
-- `updated_at` (String) Timestamp when the namespace was last updated

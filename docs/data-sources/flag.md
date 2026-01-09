@@ -22,9 +22,8 @@ Flipt flag data source
 
 ### Read-Only
 
-- `created_at` (String) Timestamp when the flag was created
 - `description` (String) Description of the flag
 - `enabled` (Boolean) Whether the flag is enabled
+- `metadata` (Map of String) Metadata key-value pairs for the flag
 - `name` (String) Display name of the flag
 - `type` (String) Type of the flag (VARIANT_FLAG_TYPE or BOOLEAN_FLAG_TYPE)
-- `updated_at` (String) Timestamp when the flag was last updated

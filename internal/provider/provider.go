@@ -5,14 +5,13 @@ package provider
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	sdk "go.flipt.io/flipt/sdk/go"
-	sdkhttp "go.flipt.io/flipt/sdk/go/http"
 )
 
 // Ensure FliptProvider satisfies various provider interfaces.
@@ -28,7 +27,14 @@ type FliptProvider struct {
 
 // FliptProviderModel describes the provider data model.
 type FliptProviderModel struct {
-	Endpoint types.String `tfsdk:"endpoint"`
+	Endpoint       types.String `tfsdk:"endpoint"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+}
+
+// FliptProviderConfig holds the configured HTTP client and endpoint for resources.
+type FliptProviderConfig struct {
+	HTTPClient *http.Client
+	Endpoint   string
 }
 
 func (p *FliptProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -42,6 +48,10 @@ func (p *FliptProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 			"endpoint": schema.StringAttribute{
 				MarkdownDescription: "Flipt server endpoint URL",
 				Required:            true,
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Default environment key for Flipt v2 (defaults to 'default')",
+				Optional:            true,
 			},
 		},
 	}
@@ -65,12 +75,26 @@ func (p *FliptProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	// Create Flipt SDK client using HTTP transport
-	transport := sdkhttp.NewTransport(data.Endpoint.ValueString())
-	client := sdk.New(transport)
+	// Get environment key, default to "default"
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && data.EnvironmentKey.ValueString() != "" {
+		envKey = data.EnvironmentKey.ValueString()
+	}
 
-	resp.DataSourceData = &client
-	resp.ResourceData = &client
+	// For Flipt v2, append environment path to endpoint
+	endpoint := data.Endpoint.ValueString() + "/api/v2/environments/" + envKey
+
+	// Create HTTP client
+	httpClient := &http.Client{}
+
+	// Create provider configuration
+	config := &FliptProviderConfig{
+		HTTPClient: httpClient,
+		Endpoint:   endpoint,
+	}
+
+	resp.DataSourceData = config
+	resp.ResourceData = config
 }
 
 func (p *FliptProvider) Resources(ctx context.Context) []func() resource.Resource {
@@ -87,6 +111,7 @@ func (p *FliptProvider) Resources(ctx context.Context) []func() resource.Resourc
 func (p *FliptProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewNamespaceDataSource,
+		NewEnvironmentDataSource,
 		NewFlagDataSource,
 		NewSegmentDataSource,
 	}

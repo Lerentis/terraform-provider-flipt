@@ -4,18 +4,22 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "go.flipt.io/flipt/rpc/flipt"
-	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &FlagResource{}
@@ -26,7 +30,8 @@ func NewFlagResource() resource.Resource {
 }
 
 type FlagResource struct {
-	client *sdk.SDK
+	httpClient *http.Client
+	endpoint   string
 }
 
 type FlagResourceModel struct {
@@ -36,8 +41,7 @@ type FlagResourceModel struct {
 	Description  types.String `tfsdk:"description"`
 	Enabled      types.Bool   `tfsdk:"enabled"`
 	Type         types.String `tfsdk:"type"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
+	Metadata     types.Map    `tfsdk:"metadata"`
 }
 
 func (r *FlagResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -75,19 +79,18 @@ func (r *FlagResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				MarkdownDescription: "Whether the flag is enabled",
 				Optional:            true,
 				Computed:            true,
+				Default:             booldefault.StaticBool(false),
 			},
 			"type": schema.StringAttribute{
 				MarkdownDescription: "Type of the flag (VARIANT_FLAG_TYPE or BOOLEAN_FLAG_TYPE)",
 				Optional:            true,
 				Computed:            true,
+				Default:             stringdefault.StaticString("VARIANT_FLAG_TYPE"),
 			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the flag was created",
-				Computed:            true,
-			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the flag was last updated",
-				Computed:            true,
+			"metadata": schema.MapAttribute{
+				MarkdownDescription: "Metadata key-value pairs for the flag",
+				Optional:            true,
+				ElementType:         types.StringType,
 			},
 		},
 	}
@@ -98,16 +101,17 @@ func (r *FlagResource) Configure(ctx context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	r.client = client
+	r.httpClient = providerConfig.HTTPClient
+	r.endpoint = providerConfig.Endpoint
 }
 
 func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -117,47 +121,126 @@ func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	flagType := flipt.FlagType_VARIANT_FLAG_TYPE
-	if !data.Type.IsNull() && !data.Type.IsUnknown() {
-		if data.Type.ValueString() == "BOOLEAN_FLAG_TYPE" {
-			flagType = flipt.FlagType_BOOLEAN_FLAG_TYPE
+	tflog.Debug(ctx, "Creating flag", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"key":           data.Key.ValueString(),
+		"name":          data.Name.ValueString(),
+	})
+
+	// Build flag payload
+	flagPayload := map[string]interface{}{
+		"@type":   "flipt.core.Flag",
+		"key":     data.Key.ValueString(),
+		"name":    data.Name.ValueString(),
+		"type":    data.Type.ValueString(),
+		"enabled": data.Enabled.ValueBool(),
+	}
+
+	if !data.Description.IsNull() && !data.Description.IsUnknown() {
+		flagPayload["description"] = data.Description.ValueString()
+	}
+
+	// Add metadata if provided
+	if !data.Metadata.IsNull() && !data.Metadata.IsUnknown() {
+		metadataMap := make(map[string]string)
+		diags := data.Metadata.ElementsAs(ctx, &metadataMap, false)
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+		if len(metadataMap) > 0 {
+			// Convert to map[string]interface{} for JSON marshaling
+			metadata := make(map[string]interface{})
+			for k, v := range metadataMap {
+				metadata[k] = v
+			}
+			flagPayload["metadata"] = metadata
 		}
 	}
 
-	createReq := &flipt.CreateFlagRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
-		Name:         data.Name.ValueString(),
-		Type:         flagType,
-		Enabled:      data.Enabled.ValueBool(),
+	// Wrap in resources API format
+	createReq := map[string]interface{}{
+		"key":     data.Key.ValueString(),
+		"payload": flagPayload,
 	}
 
-	if !data.Description.IsNull() {
-		createReq.Description = data.Description.ValueString()
+	reqBody, err := json.Marshal(createReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
 	}
 
-	flag, err := r.client.Flipt().CreateFlag(ctx, createReq)
+	url := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create flag, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Key = types.StringValue(flag.Key)
-	data.Name = types.StringValue(flag.Name)
-	data.Enabled = types.BoolValue(flag.Enabled)
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
+	}
 
+	if httpResp.StatusCode != http.StatusOK && httpResp.StatusCode != http.StatusCreated {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	// Parse response with correct structure: {"resource": {"namespaceKey": "...", "key": "...", "payload": {...}}}
+	var response struct {
+		Resource struct {
+			NamespaceKey string `json:"namespaceKey"`
+			Key          string `json:"key"`
+			Payload      struct {
+				Type        string                 `json:"type"`
+				Key         string                 `json:"key"`
+				Name        string                 `json:"name"`
+				Description string                 `json:"description"`
+				Enabled     bool                   `json:"enabled"`
+				Metadata    map[string]interface{} `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+		Revision string `json:"revision"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s, body: %s", err, string(body)))
+		return
+	}
+
+	flag := response.Resource.Payload
+
+	// Set optional and computed fields from response
 	if flag.Description != "" {
 		data.Description = types.StringValue(flag.Description)
 	}
 
-	data.Type = types.StringValue(flag.Type.String())
+	data.Enabled = types.BoolValue(flag.Enabled)
+	data.Type = types.StringValue(flag.Type)
 
-	if flag.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(flag.CreatedAt.AsTime().String())
-	}
-
-	if flag.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
+	// Set metadata if present in response
+	if len(flag.Metadata) > 0 {
+		metadataMap := make(map[string]string)
+		for k, v := range flag.Metadata {
+			// Convert interface{} to string for storage
+			metadataMap[k] = fmt.Sprintf("%v", v)
+		}
+		metadataValue, diags := types.MapValueFrom(ctx, types.StringType, metadataMap)
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+		data.Metadata = metadataValue
 	}
 
 	tflog.Trace(ctx, "created a flag resource")
@@ -171,33 +254,91 @@ func (r *FlagResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	flag, err := r.client.Flipt().GetFlag(ctx, &flipt.GetFlagRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Reading flag", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"key":           data.Key.ValueString(),
 	})
+
+	// GET URL includes flipt.core.Flag prefix
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Key = types.StringValue(flag.Key)
-	data.Name = types.StringValue(flag.Name)
-	data.Enabled = types.BoolValue(flag.Enabled)
+	if httpResp.StatusCode == http.StatusNotFound {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	// Parse response with correct structure
+	var response struct {
+		Resource struct {
+			NamespaceKey string `json:"namespaceKey"`
+			Key          string `json:"key"`
+			Payload      struct {
+				Type        string                 `json:"type"`
+				Key         string                 `json:"key"`
+				Name        string                 `json:"name"`
+				Description string                 `json:"description"`
+				Enabled     bool                   `json:"enabled"`
+				Metadata    map[string]interface{} `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+		Revision string `json:"revision"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	flag := response.Resource.Payload
+
+	// Don't overwrite Required fields (namespace_key, key, name) - preserve from state
+	// Only update Optional and Computed fields
 	if flag.Description != "" {
 		data.Description = types.StringValue(flag.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	data.Type = types.StringValue(flag.Type.String())
+	data.Enabled = types.BoolValue(flag.Enabled)
+	data.Type = types.StringValue(flag.Type)
 
-	if flag.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(flag.CreatedAt.AsTime().String())
-	}
-
-	if flag.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
+	// Update metadata
+	if len(flag.Metadata) > 0 {
+		metadataMap := make(map[string]string)
+		for k, v := range flag.Metadata {
+			metadataMap[k] = fmt.Sprintf("%v", v)
+		}
+		metadataValue, diags := types.MapValueFrom(ctx, types.StringType, metadataMap)
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+		data.Metadata = metadataValue
+	} else {
+		data.Metadata = types.MapNull(types.StringType)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -210,34 +351,129 @@ func (r *FlagResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	updateReq := &flipt.UpdateFlagRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
-		Name:         data.Name.ValueString(),
-		Enabled:      data.Enabled.ValueBool(),
+	tflog.Debug(ctx, "Updating flag", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"key":           data.Key.ValueString(),
+		"name":          data.Name.ValueString(),
+	})
+
+	// Build flag payload
+	flagPayload := map[string]interface{}{
+		"@type":   "flipt.core.Flag",
+		"key":     data.Key.ValueString(),
+		"name":    data.Name.ValueString(),
+		"type":    data.Type.ValueString(),
+		"enabled": data.Enabled.ValueBool(),
 	}
 
-	if !data.Description.IsNull() {
-		updateReq.Description = data.Description.ValueString()
+	if !data.Description.IsNull() && !data.Description.IsUnknown() {
+		flagPayload["description"] = data.Description.ValueString()
 	}
 
-	flag, err := r.client.Flipt().UpdateFlag(ctx, updateReq)
+	// Add metadata if provided
+	if !data.Metadata.IsNull() && !data.Metadata.IsUnknown() {
+		metadataMap := make(map[string]string)
+		diags := data.Metadata.ElementsAs(ctx, &metadataMap, false)
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+		if len(metadataMap) > 0 {
+			metadata := make(map[string]interface{})
+			for k, v := range metadataMap {
+				metadata[k] = v
+			}
+			flagPayload["metadata"] = metadata
+		}
+	}
+
+	// Wrap in resources API format
+	updateReq := map[string]interface{}{
+		"key":     data.Key.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	// PUT URL doesn't include the flipt.core.Flag prefix
+	url := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update flag, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Name = types.StringValue(flag.Name)
-	data.Enabled = types.BoolValue(flag.Enabled)
-
-	if flag.Description != "" {
-		data.Description = types.StringValue(flag.Description)
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
 	}
 
-	data.Type = types.StringValue(flag.Type.String())
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
 
-	if flag.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
+	// Parse response
+	var response struct {
+		Resource struct {
+			NamespaceKey string `json:"namespaceKey"`
+			Key          string `json:"key"`
+			Payload      struct {
+				Type        string                 `json:"type"`
+				Key         string                 `json:"key"`
+				Name        string                 `json:"name"`
+				Description string                 `json:"description"`
+				Enabled     bool                   `json:"enabled"`
+				Metadata    map[string]interface{} `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+		Revision string `json:"revision"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	flag := response.Resource.Payload
+
+	// Update optional and computed fields
+	if flag.Description != "" {
+		data.Description = types.StringValue(flag.Description)
+	} else {
+		data.Description = types.StringNull()
+	}
+
+	data.Enabled = types.BoolValue(flag.Enabled)
+	data.Type = types.StringValue(flag.Type)
+
+	// Update metadata
+	if len(flag.Metadata) > 0 {
+		metadataMap := make(map[string]string)
+		for k, v := range flag.Metadata {
+			metadataMap[k] = fmt.Sprintf("%v", v)
+		}
+		metadataValue, diags := types.MapValueFrom(ctx, types.StringType, metadataMap)
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+		data.Metadata = metadataValue
+	} else {
+		data.Metadata = types.MapNull(types.StringType)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -250,12 +486,39 @@ func (r *FlagResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	err := r.client.Flipt().DeleteFlag(ctx, &flipt.DeleteFlagRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	if data.Key.IsNull() || data.Key.ValueString() == "" {
+		resp.Diagnostics.AddError("Missing Flag Key",
+			"The flag key is required for deletion but was not found in the state.")
+		return
+	}
+
+	tflog.Debug(ctx, "Deleting flag", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"key":           data.Key.ValueString(),
 	})
+
+	// DELETE URL includes flipt.core.Flag prefix
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete flag, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode == http.StatusNotFound {
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK && httpResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
 		return
 	}
 

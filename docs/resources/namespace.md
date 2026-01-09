@@ -23,9 +23,5 @@ Flipt namespace resource
 ### Optional
 
 - `description` (String) Description of the namespace
+- `environment_key` (String) Environment key (defaults to 'default')
 - `protected` (Boolean) Whether the namespace is protected
-
-### Read-Only
-
-- `created_at` (String) Timestamp when the namespace was created
-- `updated_at` (String) Timestamp when the namespace was last updated

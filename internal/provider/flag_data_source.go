@@ -5,13 +5,15 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	flipt "go.flipt.io/flipt/rpc/flipt"
-	sdk "go.flipt.io/flipt/sdk/go"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 var _ datasource.DataSource = &FlagDataSource{}
@@ -21,7 +23,8 @@ func NewFlagDataSource() datasource.DataSource {
 }
 
 type FlagDataSource struct {
-	client *sdk.SDK
+	httpClient *http.Client
+	endpoint   string
 }
 
 type FlagDataSourceModel struct {
@@ -31,8 +34,7 @@ type FlagDataSourceModel struct {
 	Description  types.String `tfsdk:"description"`
 	Enabled      types.Bool   `tfsdk:"enabled"`
 	Type         types.String `tfsdk:"type"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
+	Metadata     types.Map    `tfsdk:"metadata"`
 }
 
 func (d *FlagDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -69,13 +71,10 @@ func (d *FlagDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				MarkdownDescription: "Type of the flag (VARIANT_FLAG_TYPE or BOOLEAN_FLAG_TYPE)",
 				Computed:            true,
 			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the flag was created",
+			"metadata": schema.MapAttribute{
+				MarkdownDescription: "Metadata key-value pairs for the flag",
 				Computed:            true,
-			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the flag was last updated",
-				Computed:            true,
+				ElementType:         types.StringType,
 			},
 		},
 	}
@@ -86,16 +85,17 @@ func (d *FlagDataSource) Configure(ctx context.Context, req datasource.Configure
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T", req.ProviderData),
 		)
 		return
 	}
 
-	d.client = client
+	d.httpClient = providerConfig.HTTPClient
+	d.endpoint = providerConfig.Endpoint
 }
 
 func (d *FlagDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
@@ -106,18 +106,70 @@ func (d *FlagDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	flag, err := d.client.Flipt().GetFlag(ctx, &flipt.GetFlagRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Reading flag", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"key":           data.Key.ValueString(),
 	})
+
+	// GET URL includes flipt.core.Flag prefix
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s", d.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := d.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode == http.StatusNotFound {
 		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Flag with key '%s' not found in namespace '%s'", data.Key.ValueString(), data.NamespaceKey.ValueString()))
 		return
 	}
 
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	// Parse response with correct structure
+	var response struct {
+		Resource struct {
+			NamespaceKey string `json:"namespaceKey"`
+			Key          string `json:"key"`
+			Payload      struct {
+				Type        string                 `json:"type"`
+				Key         string                 `json:"key"`
+				Name        string                 `json:"name"`
+				Description string                 `json:"description"`
+				Enabled     bool                   `json:"enabled"`
+				Metadata    map[string]interface{} `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+		Revision string `json:"revision"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	flag := response.Resource.Payload
+
 	data.Key = types.StringValue(flag.Key)
 	data.Name = types.StringValue(flag.Name)
 	data.Enabled = types.BoolValue(flag.Enabled)
+	data.Type = types.StringValue(flag.Type)
 
 	if flag.Description != "" {
 		data.Description = types.StringValue(flag.Description)
@@ -125,16 +177,20 @@ func (d *FlagDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		data.Description = types.StringNull()
 	}
 
-	if flag.Type != 0 {
-		data.Type = types.StringValue(flag.Type.String())
-	}
-
-	if flag.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(flag.CreatedAt.AsTime().String())
-	}
-
-	if flag.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(flag.UpdatedAt.AsTime().String())
+	// Set metadata if present
+	if len(flag.Metadata) > 0 {
+		metadataMap := make(map[string]string)
+		for k, v := range flag.Metadata {
+			metadataMap[k] = fmt.Sprintf("%v", v)
+		}
+		metadataValue, diags := types.MapValueFrom(ctx, types.StringType, metadataMap)
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return
+		}
+		data.Metadata = metadataValue
+	} else {
+		data.Metadata = types.MapNull(types.StringType)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
