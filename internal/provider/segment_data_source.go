@@ -5,13 +5,15 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	flipt "go.flipt.io/flipt/rpc/flipt"
-	sdk "go.flipt.io/flipt/sdk/go"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 var _ datasource.DataSource = &SegmentDataSource{}
@@ -21,7 +23,8 @@ func NewSegmentDataSource() datasource.DataSource {
 }
 
 type SegmentDataSource struct {
-	client *sdk.SDK
+	httpClient *http.Client
+	endpoint   string
 }
 
 type SegmentDataSourceModel struct {
@@ -30,8 +33,6 @@ type SegmentDataSourceModel struct {
 	Name         types.String `tfsdk:"name"`
 	Description  types.String `tfsdk:"description"`
 	MatchType    types.String `tfsdk:"match_type"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
 }
 
 func (d *SegmentDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -45,31 +46,28 @@ func (d *SegmentDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 
 		Attributes: map[string]schema.Attribute{
 			"namespace_key": schema.StringAttribute{
-				MarkdownDescription: "Namespace key where the segment belongs",
+				MarkdownDescription: "Namespace key",
+				Description:         "Namespace key",
 				Required:            true,
 			},
 			"key": schema.StringAttribute{
-				MarkdownDescription: "Unique key for the segment",
+				MarkdownDescription: "Segment key",
+				Description:         "Segment key",
 				Required:            true,
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Display name of the segment",
+				MarkdownDescription: "Segment name",
+				Description:         "Segment name",
 				Computed:            true,
 			},
 			"description": schema.StringAttribute{
-				MarkdownDescription: "Description of the segment",
+				MarkdownDescription: "Segment description",
+				Description:         "Segment description",
 				Computed:            true,
 			},
 			"match_type": schema.StringAttribute{
-				MarkdownDescription: "Match type for the segment (ALL_MATCH_TYPE or ANY_MATCH_TYPE)",
-				Computed:            true,
-			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the segment was created",
-				Computed:            true,
-			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the segment was last updated",
+				MarkdownDescription: "Segment match type",
+				Description:         "Segment match type",
 				Computed:            true,
 			},
 		},
@@ -81,53 +79,83 @@ func (d *SegmentDataSource) Configure(ctx context.Context, req datasource.Config
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	d.client = client
+	d.httpClient = providerConfig.HTTPClient
+	d.endpoint = providerConfig.Endpoint
 }
 
 func (d *SegmentDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data SegmentDataSourceModel
-
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	segment, err := d.client.Flipt().GetSegment(ctx, &flipt.GetSegmentRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Reading segment data source", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"segment_key":   data.Key.ValueString(),
 	})
+
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		d.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Segment with key '%s' not found in namespace '%s'", data.Key.ValueString(), data.NamespaceKey.ValueString()))
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 
-	data.Key = types.StringValue(segment.Key)
-	data.Name = types.StringValue(segment.Name)
+	httpResp, err := d.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
 
-	if segment.Description != "" {
-		data.Description = types.StringValue(segment.Description)
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read segment, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var segmentResponse struct {
+		Resource struct {
+			Payload struct {
+				Key         string `json:"key"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				MatchType   string `json:"matchType"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	if err := json.Unmarshal(body, &segmentResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	data.Name = types.StringValue(segmentResponse.Resource.Payload.Name)
+
+	if segmentResponse.Resource.Payload.Description != "" {
+		data.Description = types.StringValue(segmentResponse.Resource.Payload.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	data.MatchType = types.StringValue(segment.MatchType.String())
-
-	if segment.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(segment.CreatedAt.AsTime().String())
-	}
-
-	if segment.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
-	}
+	data.MatchType = types.StringValue(segmentResponse.Resource.Payload.MatchType)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

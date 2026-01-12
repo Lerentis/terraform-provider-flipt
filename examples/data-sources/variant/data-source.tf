@@ -11,11 +11,16 @@ provider "flipt" {
   environment = "default"
 }
 
-resource "flipt_variant" "example" {
+data "flipt_variant" "example" {
   namespace_key = "default"
   flag_key      = "my-feature"
   key           = "variant-a"
-  name          = "Variant A"
-  description   = "First variant option"
-  attachment    = jsonencode({ color = "red", size = "large" })
+}
+
+output "variant_name" {
+  value = data.flipt_variant.example.name
+}
+
+output "variant_attachment" {
+  value = data.flipt_variant.example.attachment
 }

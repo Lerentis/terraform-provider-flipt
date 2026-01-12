@@ -4,8 +4,12 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,8 +18,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "go.flipt.io/flipt/rpc/flipt"
-	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &VariantResource{}
@@ -26,19 +28,17 @@ func NewVariantResource() resource.Resource {
 }
 
 type VariantResource struct {
-	client *sdk.SDK
+	httpClient *http.Client
+	endpoint   string
 }
 
 type VariantResourceModel struct {
 	NamespaceKey types.String `tfsdk:"namespace_key"`
 	FlagKey      types.String `tfsdk:"flag_key"`
-	ID           types.String `tfsdk:"id"`
 	Key          types.String `tfsdk:"key"`
 	Name         types.String `tfsdk:"name"`
 	Description  types.String `tfsdk:"description"`
 	Attachment   types.String `tfsdk:"attachment"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
 }
 
 func (r *VariantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -64,20 +64,16 @@ func (r *VariantResource) Schema(ctx context.Context, req resource.SchemaRequest
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"id": schema.StringAttribute{
-				MarkdownDescription: "Unique identifier for the variant",
-				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
-			},
 			"key": schema.StringAttribute{
 				MarkdownDescription: "Unique key for the variant",
 				Required:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Display name of the variant",
-				Required:            true,
+				Optional:            true,
 			},
 			"description": schema.StringAttribute{
 				MarkdownDescription: "Description of the variant",
@@ -86,14 +82,6 @@ func (r *VariantResource) Schema(ctx context.Context, req resource.SchemaRequest
 			"attachment": schema.StringAttribute{
 				MarkdownDescription: "JSON attachment data for the variant",
 				Optional:            true,
-			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the variant was created",
-				Computed:            true,
-			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the variant was last updated",
-				Computed:            true,
 			},
 		},
 	}
@@ -104,16 +92,17 @@ func (r *VariantResource) Configure(ctx context.Context, req resource.ConfigureR
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	r.client = client
+	r.httpClient = providerConfig.HTTPClient
+	r.endpoint = providerConfig.Endpoint
 }
 
 func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -123,53 +112,143 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	createReq := &flipt.CreateVariantRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Creating variant", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"variant_key":   data.Key.ValueString(),
+	})
+
+	// First, get the current flag to read existing variants
+	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
 	}
 
-	if !data.Name.IsNull() {
-		createReq.Name = data.Name.ValueString()
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	if !data.Description.IsNull() {
-		createReq.Description = data.Description.ValueString()
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Type        string                   `json:"type"`
+				Key         string                   `json:"key"`
+				Name        string                   `json:"name"`
+				Description string                   `json:"description"`
+				Enabled     bool                     `json:"enabled"`
+				Variants    []map[string]interface{} `json:"variants"`
+				Metadata    map[string]interface{}   `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
 	}
 
-	if !data.Attachment.IsNull() {
-		createReq.Attachment = data.Attachment.ValueString()
+	body, _ := io.ReadAll(httpResp.Body)
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse flag response: %s", err))
+		return
 	}
 
-	variant, err := r.client.Flipt().CreateVariant(ctx, createReq)
+	// Build new variant
+	newVariant := map[string]interface{}{
+		"key": data.Key.ValueString(),
+	}
+
+	if !data.Name.IsNull() && !data.Name.IsUnknown() {
+		newVariant["name"] = data.Name.ValueString()
+	} else {
+		newVariant["name"] = ""
+	}
+
+	if !data.Description.IsNull() && !data.Description.IsUnknown() {
+		newVariant["description"] = data.Description.ValueString()
+	} else {
+		newVariant["description"] = ""
+	}
+
+	if !data.Attachment.IsNull() && !data.Attachment.IsUnknown() {
+		// Parse the attachment JSON string into a map
+		var attachmentData map[string]interface{}
+		if err := json.Unmarshal([]byte(data.Attachment.ValueString()), &attachmentData); err != nil {
+			resp.Diagnostics.AddError("Invalid Attachment", fmt.Sprintf("Attachment must be valid JSON: %s", err))
+			return
+		}
+		newVariant["attachment"] = attachmentData
+	} else {
+		newVariant["attachment"] = map[string]interface{}{}
+	}
+
+	// Add new variant to existing variants
+	existingVariants := flagResponse.Resource.Payload.Variants
+	if existingVariants == nil {
+		existingVariants = []map[string]interface{}{}
+	}
+	allVariants := append(existingVariants, newVariant)
+
+	// Update the flag with all variants (including the new one)
+	flagPayload := map[string]interface{}{
+		"@type":       "flipt.core.Flag",
+		"key":         flagResponse.Resource.Payload.Key,
+		"name":        flagResponse.Resource.Payload.Name,
+		"description": flagResponse.Resource.Payload.Description,
+		"type":        flagResponse.Resource.Payload.Type,
+		"enabled":     flagResponse.Resource.Payload.Enabled,
+		"variants":    allVariants,
+		"rules":       []interface{}{},
+		"metadata":    flagResponse.Resource.Payload.Metadata,
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.FlagKey.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create variant, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.ID = types.StringValue(variant.Id)
-	data.Key = types.StringValue(variant.Key)
-
-	if variant.Name != "" {
-		data.Name = types.StringValue(variant.Name)
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create variant, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	if variant.Description != "" {
-		data.Description = types.StringValue(variant.Description)
+	// Parse response to confirm variant was created
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
 	}
 
-	if variant.Attachment != "" {
-		data.Attachment = types.StringValue(variant.Attachment)
-	}
-
-	if variant.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(variant.CreatedAt.AsTime().String())
-	}
-
-	if variant.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(variant.UpdatedAt.AsTime().String())
-	}
-
+	// State is already set from plan, no need to update
 	tflog.Trace(ctx, "created a variant resource")
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -181,55 +260,98 @@ func (r *VariantResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	flag, err := r.client.Flipt().GetFlag(ctx, &flipt.GetFlagRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.FlagKey.ValueString(),
+	tflog.Debug(ctx, "Reading variant", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"variant_key":   data.Key.ValueString(),
 	})
+
+	// Get the flag to read its variants
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	// Find the variant in the flag's variants list
-	var foundVariant *flipt.Variant
-	for _, v := range flag.Variants {
-		if v.Id == data.ID.ValueString() {
-			foundVariant = v
-			break
-		}
-	}
-
-	if foundVariant == nil {
+	if httpResp.StatusCode == http.StatusNotFound {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	data.Key = types.StringValue(foundVariant.Key)
-
-	if foundVariant.Name != "" {
-		data.Name = types.StringValue(foundVariant.Name)
-	} else {
-		data.Name = types.StringNull()
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
 	}
 
-	if foundVariant.Description != "" {
-		data.Description = types.StringValue(foundVariant.Description)
-	} else {
-		data.Description = types.StringNull()
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	if foundVariant.Attachment != "" {
-		data.Attachment = types.StringValue(foundVariant.Attachment)
-	} else {
-		data.Attachment = types.StringNull()
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Variants []struct {
+					Key         string                 `json:"key"`
+					Name        string                 `json:"name"`
+					Description string                 `json:"description"`
+					Attachment  map[string]interface{} `json:"attachment"`
+				} `json:"variants"`
+			} `json:"payload"`
+		} `json:"resource"`
 	}
 
-	if foundVariant.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(foundVariant.CreatedAt.AsTime().String())
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
 	}
 
-	if foundVariant.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(foundVariant.UpdatedAt.AsTime().String())
+	// Find the variant by key
+	var found bool
+	for _, v := range flagResponse.Resource.Payload.Variants {
+		if v.Key == data.Key.ValueString() {
+			found = true
+
+			if v.Name != "" {
+				data.Name = types.StringValue(v.Name)
+			} else {
+				data.Name = types.StringNull()
+			}
+
+			if v.Description != "" {
+				data.Description = types.StringValue(v.Description)
+			} else {
+				data.Description = types.StringNull()
+			}
+
+			if len(v.Attachment) > 0 {
+				attachmentJSON, err := json.Marshal(v.Attachment)
+				if err == nil {
+					data.Attachment = types.StringValue(string(attachmentJSON))
+				} else {
+					data.Attachment = types.StringNull()
+				}
+			} else {
+				data.Attachment = types.StringNull()
+			}
+			break
+		}
+	}
+
+	if !found {
+		resp.State.RemoveResource(ctx)
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -242,47 +364,141 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	updateReq := &flipt.UpdateVariantRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
-		Id:           data.ID.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Updating variant", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"variant_key":   data.Key.ValueString(),
+	})
+
+	// Get the current flag to read existing variants
+	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
 	}
 
-	if !data.Name.IsNull() {
-		updateReq.Name = data.Name.ValueString()
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	if !data.Description.IsNull() {
-		updateReq.Description = data.Description.ValueString()
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Type        string                   `json:"type"`
+				Key         string                   `json:"key"`
+				Name        string                   `json:"name"`
+				Description string                   `json:"description"`
+				Enabled     bool                     `json:"enabled"`
+				Variants    []map[string]interface{} `json:"variants"`
+				Metadata    map[string]interface{}   `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
 	}
 
-	if !data.Attachment.IsNull() {
-		updateReq.Attachment = data.Attachment.ValueString()
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse flag response: %s", err))
+		return
 	}
 
-	variant, err := r.client.Flipt().UpdateVariant(ctx, updateReq)
+	// Update the variant in the variants list
+	updatedVariants := make([]map[string]interface{}, 0)
+	found := false
+	for _, v := range flagResponse.Resource.Payload.Variants {
+		if vKey, ok := v["key"].(string); ok && vKey == data.Key.ValueString() {
+			found = true
+			updatedVariant := map[string]interface{}{
+				"key": data.Key.ValueString(),
+			}
+
+			if !data.Name.IsNull() && !data.Name.IsUnknown() {
+				updatedVariant["name"] = data.Name.ValueString()
+			} else {
+				updatedVariant["name"] = ""
+			}
+
+			if !data.Description.IsNull() && !data.Description.IsUnknown() {
+				updatedVariant["description"] = data.Description.ValueString()
+			} else {
+				updatedVariant["description"] = ""
+			}
+
+			if !data.Attachment.IsNull() && !data.Attachment.IsUnknown() {
+				var attachmentData map[string]interface{}
+				if err := json.Unmarshal([]byte(data.Attachment.ValueString()), &attachmentData); err != nil {
+					resp.Diagnostics.AddError("Invalid Attachment", fmt.Sprintf("Attachment must be valid JSON: %s", err))
+					return
+				}
+				updatedVariant["attachment"] = attachmentData
+			} else {
+				updatedVariant["attachment"] = map[string]interface{}{}
+			}
+
+			updatedVariants = append(updatedVariants, updatedVariant)
+		} else {
+			updatedVariants = append(updatedVariants, v)
+		}
+	}
+
+	if !found {
+		resp.Diagnostics.AddError("Variant Not Found", fmt.Sprintf("Variant with key '%s' not found in flag", data.Key.ValueString()))
+		return
+	}
+
+	// Update the flag with modified variants
+	flagPayload := map[string]interface{}{
+		"@type":       "flipt.core.Flag",
+		"key":         flagResponse.Resource.Payload.Key,
+		"name":        flagResponse.Resource.Payload.Name,
+		"description": flagResponse.Resource.Payload.Description,
+		"type":        flagResponse.Resource.Payload.Type,
+		"enabled":     flagResponse.Resource.Payload.Enabled,
+		"variants":    updatedVariants,
+		"rules":       []interface{}{},
+		"metadata":    flagResponse.Resource.Payload.Metadata,
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.FlagKey.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update variant, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Key = types.StringValue(variant.Key)
-
-	if variant.Name != "" {
-		data.Name = types.StringValue(variant.Name)
-	}
-
-	if variant.Description != "" {
-		data.Description = types.StringValue(variant.Description)
-	}
-
-	if variant.Attachment != "" {
-		data.Attachment = types.StringValue(variant.Attachment)
-	}
-
-	if variant.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(variant.UpdatedAt.AsTime().String())
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update variant, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -295,13 +511,109 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	err := r.client.Flipt().DeleteVariant(ctx, &flipt.DeleteVariantRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
-		Id:           data.ID.ValueString(),
+	tflog.Debug(ctx, "Deleting variant", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"variant_key":   data.Key.ValueString(),
 	})
+
+	// Get the current flag to read existing variants
+	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		// If flag doesn't exist, variant is already gone
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode == http.StatusNotFound {
+		// Flag doesn't exist, so variant is gone
+		return
+	}
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Type        string                   `json:"type"`
+				Key         string                   `json:"key"`
+				Name        string                   `json:"name"`
+				Description string                   `json:"description"`
+				Enabled     bool                     `json:"enabled"`
+				Variants    []map[string]interface{} `json:"variants"`
+				Metadata    map[string]interface{}   `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse flag response: %s", err))
+		return
+	}
+
+	// Remove the variant from the variants list
+	remainingVariants := make([]map[string]interface{}, 0)
+	for _, v := range flagResponse.Resource.Payload.Variants {
+		if vKey, ok := v["key"].(string); !ok || vKey != data.Key.ValueString() {
+			remainingVariants = append(remainingVariants, v)
+		}
+	}
+
+	// Update the flag with remaining variants (excluding the deleted one)
+	flagPayload := map[string]interface{}{
+		"@type":       "flipt.core.Flag",
+		"key":         flagResponse.Resource.Payload.Key,
+		"name":        flagResponse.Resource.Payload.Name,
+		"description": flagResponse.Resource.Payload.Description,
+		"type":        flagResponse.Resource.Payload.Type,
+		"enabled":     flagResponse.Resource.Payload.Enabled,
+		"variants":    remainingVariants,
+		"rules":       []interface{}{},
+		"metadata":    flagResponse.Resource.Payload.Metadata,
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.FlagKey.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete variant, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete variant, status: %d, body: %s", httpResp.StatusCode, string(body)))
 		return
 	}
 
@@ -309,5 +621,5 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 }
 
 func (r *VariantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resource.ImportStatePassthroughID(ctx, path.Root("key"), req, resp)
 }

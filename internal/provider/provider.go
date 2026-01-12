@@ -12,6 +12,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	sdk "go.flipt.io/flipt/sdk/go"
+	sdkhttp "go.flipt.io/flipt/sdk/go/http"
 )
 
 // Ensure FliptProvider satisfies various provider interfaces.
@@ -35,6 +37,7 @@ type FliptProviderModel struct {
 type FliptProviderConfig struct {
 	HTTPClient *http.Client
 	Endpoint   string
+	SDKClient  *sdk.SDK // TODO: Remove when all resources are migrated to manual HTTP
 }
 
 func (p *FliptProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -87,10 +90,15 @@ func (p *FliptProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	// Create HTTP client
 	httpClient := &http.Client{}
 
+	// Create SDK client for unmigrated resources (TODO: Remove when all migrated)
+	sdkTransport := sdkhttp.NewTransport(data.Endpoint.ValueString())
+	sdkClient := sdk.New(sdkTransport)
+
 	// Create provider configuration
 	config := &FliptProviderConfig{
 		HTTPClient: httpClient,
 		Endpoint:   endpoint,
+		SDKClient:  &sdkClient,
 	}
 
 	resp.DataSourceData = config
@@ -114,6 +122,7 @@ func (p *FliptProvider) DataSources(ctx context.Context) []func() datasource.Dat
 		NewEnvironmentDataSource,
 		NewFlagDataSource,
 		NewSegmentDataSource,
+		NewVariantDataSource,
 	}
 }
 

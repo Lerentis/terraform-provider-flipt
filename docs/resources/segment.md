@@ -25,8 +25,3 @@ Flipt segment resource
 
 - `description` (String) Description of the segment
 - `match_type` (String) Match type for the segment (ALL_MATCH_TYPE or ANY_MATCH_TYPE)
-
-### Read-Only
-
-- `created_at` (String) Timestamp when the segment was created
-- `updated_at` (String) Timestamp when the segment was last updated

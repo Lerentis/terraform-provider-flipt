@@ -17,13 +17,11 @@ Flipt segment data source
 
 ### Required
 
-- `key` (String) Unique key for the segment
-- `namespace_key` (String) Namespace key where the segment belongs
+- `key` (String) Segment key
+- `namespace_key` (String) Namespace key
 
 ### Read-Only
 
-- `created_at` (String) Timestamp when the segment was created
-- `description` (String) Description of the segment
-- `match_type` (String) Match type for the segment (ALL_MATCH_TYPE or ANY_MATCH_TYPE)
-- `name` (String) Display name of the segment
-- `updated_at` (String) Timestamp when the segment was last updated
+- `description` (String) Segment description
+- `match_type` (String) Segment match type
+- `name` (String) Segment name

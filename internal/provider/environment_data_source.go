@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -21,7 +22,9 @@ func NewEnvironmentDataSource() datasource.DataSource {
 }
 
 type EnvironmentDataSource struct {
-	client *sdk.SDK
+	httpClient *http.Client
+	endpoint   string
+	client     *sdk.SDK // TODO: Remove when migrated to manual HTTP
 }
 
 type EnvironmentDataSourceModel struct {
@@ -60,16 +63,18 @@ func (d *EnvironmentDataSource) Configure(ctx context.Context, req datasource.Co
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	d.client = client
+	d.httpClient = providerConfig.HTTPClient
+	d.endpoint = providerConfig.Endpoint
+	d.client = providerConfig.SDKClient // TODO: Remove when migrated to manual HTTP
 }
 
 func (d *EnvironmentDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {

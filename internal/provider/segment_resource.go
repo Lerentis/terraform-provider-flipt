@@ -4,18 +4,21 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "go.flipt.io/flipt/rpc/flipt"
-	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &SegmentResource{}
@@ -26,7 +29,8 @@ func NewSegmentResource() resource.Resource {
 }
 
 type SegmentResource struct {
-	client *sdk.SDK
+	httpClient *http.Client
+	endpoint   string
 }
 
 type SegmentResourceModel struct {
@@ -35,8 +39,6 @@ type SegmentResourceModel struct {
 	Name         types.String `tfsdk:"name"`
 	Description  types.String `tfsdk:"description"`
 	MatchType    types.String `tfsdk:"match_type"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
 }
 
 func (r *SegmentResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -74,14 +76,7 @@ func (r *SegmentResource) Schema(ctx context.Context, req resource.SchemaRequest
 				MarkdownDescription: "Match type for the segment (ALL_MATCH_TYPE or ANY_MATCH_TYPE)",
 				Optional:            true,
 				Computed:            true,
-			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the segment was created",
-				Computed:            true,
-			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the segment was last updated",
-				Computed:            true,
+				Default:             stringdefault.StaticString("ALL_MATCH_TYPE"),
 			},
 		},
 	}
@@ -92,16 +87,17 @@ func (r *SegmentResource) Configure(ctx context.Context, req resource.ConfigureR
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	r.client = client
+	r.httpClient = providerConfig.HTTPClient
+	r.endpoint = providerConfig.Endpoint
 }
 
 func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -111,45 +107,56 @@ func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	matchType := flipt.MatchType_ALL_MATCH_TYPE
-	if !data.MatchType.IsNull() && !data.MatchType.IsUnknown() {
-		if data.MatchType.ValueString() == "ANY_MATCH_TYPE" {
-			matchType = flipt.MatchType_ANY_MATCH_TYPE
-		}
+	tflog.Debug(ctx, "Creating segment", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"segment_key":   data.Key.ValueString(),
+	})
+
+	// Build segment payload
+	segmentPayload := map[string]interface{}{
+		"@type":       "flipt.core.Segment",
+		"key":         data.Key.ValueString(),
+		"name":        data.Name.ValueString(),
+		"matchType":   data.MatchType.ValueString(),
+		"constraints": []interface{}{},
 	}
 
-	createReq := &flipt.CreateSegmentRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
-		Name:         data.Name.ValueString(),
-		MatchType:    matchType,
+	if !data.Description.IsNull() && !data.Description.IsUnknown() {
+		segmentPayload["description"] = data.Description.ValueString()
+	} else {
+		segmentPayload["description"] = ""
 	}
 
-	if !data.Description.IsNull() {
-		createReq.Description = data.Description.ValueString()
+	createReq := map[string]interface{}{
+		"key":     data.Key.ValueString(),
+		"payload": segmentPayload,
 	}
 
-	segment, err := r.client.Flipt().CreateSegment(ctx, createReq)
+	reqBody, err := json.Marshal(createReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	url := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create segment, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Key = types.StringValue(segment.Key)
-	data.Name = types.StringValue(segment.Name)
-
-	if segment.Description != "" {
-		data.Description = types.StringValue(segment.Description)
-	}
-
-	data.MatchType = types.StringValue(segment.MatchType.String())
-
-	if segment.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(segment.CreatedAt.AsTime().String())
-	}
-
-	if segment.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
+	body, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create segment, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
 	tflog.Trace(ctx, "created a segment resource")
@@ -163,33 +170,68 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	segment, err := r.client.Flipt().GetSegment(ctx, &flipt.GetSegmentRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Reading segment", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"segment_key":   data.Key.ValueString(),
 	})
+
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Key = types.StringValue(segment.Key)
-	data.Name = types.StringValue(segment.Name)
+	if httpResp.StatusCode == http.StatusNotFound {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 
-	if segment.Description != "" {
-		data.Description = types.StringValue(segment.Description)
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read segment, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var segmentResponse struct {
+		Resource struct {
+			Payload struct {
+				Key         string `json:"key"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				MatchType   string `json:"matchType"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	if err := json.Unmarshal(body, &segmentResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	data.Name = types.StringValue(segmentResponse.Resource.Payload.Name)
+
+	if segmentResponse.Resource.Payload.Description != "" {
+		data.Description = types.StringValue(segmentResponse.Resource.Payload.Description)
 	} else {
 		data.Description = types.StringNull()
 	}
 
-	data.MatchType = types.StringValue(segment.MatchType.String())
-
-	if segment.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(segment.CreatedAt.AsTime().String())
-	}
-
-	if segment.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
-	}
+	data.MatchType = types.StringValue(segmentResponse.Resource.Payload.MatchType)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -201,40 +243,92 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	matchType := flipt.MatchType_ALL_MATCH_TYPE
-	if !data.MatchType.IsNull() && !data.MatchType.IsUnknown() {
-		if data.MatchType.ValueString() == "ANY_MATCH_TYPE" {
-			matchType = flipt.MatchType_ANY_MATCH_TYPE
-		}
+	tflog.Debug(ctx, "Updating segment", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"segment_key":   data.Key.ValueString(),
+	})
+
+	// Get current segment to preserve constraints
+	getURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", getURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
 	}
 
-	updateReq := &flipt.UpdateSegmentRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
-		Name:         data.Name.ValueString(),
-		MatchType:    matchType,
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read segment, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	if !data.Description.IsNull() {
-		updateReq.Description = data.Description.ValueString()
+	var segmentResponse struct {
+		Resource struct {
+			Payload struct {
+				Constraints []interface{} `json:"constraints"`
+			} `json:"payload"`
+		} `json:"resource"`
 	}
 
-	segment, err := r.client.Flipt().UpdateSegment(ctx, updateReq)
+	if err := json.Unmarshal(body, &segmentResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse segment response: %s", err))
+		return
+	}
+
+	// Build updated segment payload, preserving constraints
+	segmentPayload := map[string]interface{}{
+		"@type":       "flipt.core.Segment",
+		"key":         data.Key.ValueString(),
+		"name":        data.Name.ValueString(),
+		"matchType":   data.MatchType.ValueString(),
+		"constraints": segmentResponse.Resource.Payload.Constraints,
+	}
+
+	if !data.Description.IsNull() && !data.Description.IsUnknown() {
+		segmentPayload["description"] = data.Description.ValueString()
+	} else {
+		segmentPayload["description"] = ""
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.Key.ValueString(),
+		"payload": segmentPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update segment, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.Name = types.StringValue(segment.Name)
-
-	if segment.Description != "" {
-		data.Description = types.StringValue(segment.Description)
-	}
-
-	data.MatchType = types.StringValue(segment.MatchType.String())
-
-	if segment.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(segment.UpdatedAt.AsTime().String())
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update segment, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -247,12 +341,31 @@ func (r *SegmentResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	err := r.client.Flipt().DeleteSegment(ctx, &flipt.DeleteSegmentRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		Key:          data.Key.ValueString(),
+	tflog.Debug(ctx, "Deleting segment", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"segment_key":   data.Key.ValueString(),
 	})
+
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete segment, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete segment, status: %d, body: %s", httpResp.StatusCode, string(body)))
 		return
 	}
 

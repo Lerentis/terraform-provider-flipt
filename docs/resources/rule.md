@@ -19,14 +19,13 @@ Flipt rule resource (belongs to a flag)
 
 - `flag_key` (String) Flag key that this rule belongs to
 - `namespace_key` (String) Namespace key where the flag belongs
-- `segment_key` (String) Segment key to evaluate for this rule
+- `segment_keys` (List of String) List of segment keys to evaluate for this rule
 
 ### Optional
 
-- `rank` (Number) Rank/order of the rule
+- `rank` (Number) Rank/order of the rule (lower ranks are evaluated first)
+- `segment_operator` (String) Operator for combining segments (OR_SEGMENT_OPERATOR or AND_SEGMENT_OPERATOR)
 
 ### Read-Only
 
-- `created_at` (String) Timestamp when the rule was created
-- `id` (String) Unique identifier for the rule
-- `updated_at` (String) Timestamp when the rule was last updated
+- `id` (String) Unique identifier for the rule (auto-generated)

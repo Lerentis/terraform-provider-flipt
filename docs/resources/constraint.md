@@ -18,18 +18,12 @@ Flipt constraint resource (belongs to a segment)
 ### Required
 
 - `namespace_key` (String) Namespace key where the segment belongs
-- `operator` (String) Comparison operator
-- `property` (String) Property to evaluate
+- `operator` (String) Comparison operator (e.g., eq, suffix, prefix)
+- `property` (String) Property name for the constraint (unique identifier)
 - `segment_key` (String) Segment key that this constraint belongs to
-- `type` (String) Type of constraint (STRING_COMPARISON_TYPE, NUMBER_COMPARISON_TYPE, BOOLEAN_COMPARISON_TYPE, etc.)
+- `type` (String) Constraint type (e.g., STRING_COMPARISON_TYPE)
+- `value` (String) Value to compare against
 
 ### Optional
 
 - `description` (String) Description of the constraint
-- `value` (String) Value to compare against
-
-### Read-Only
-
-- `created_at` (String) Timestamp when the constraint was created
-- `id` (String) Unique identifier for the constraint
-- `updated_at` (String) Timestamp when the constraint was last updated

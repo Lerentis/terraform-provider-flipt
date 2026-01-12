@@ -4,9 +4,14 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -14,29 +19,27 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	flipt "go.flipt.io/flipt/rpc/flipt"
-	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ resource.Resource = &RuleResource{}
 var _ resource.ResourceWithImportState = &RuleResource{}
 
+type RuleResource struct {
+	httpClient *http.Client
+	endpoint   string
+}
+
 func NewRuleResource() resource.Resource {
 	return &RuleResource{}
 }
 
-type RuleResource struct {
-	client *sdk.SDK
-}
-
 type RuleResourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	FlagKey      types.String `tfsdk:"flag_key"`
-	ID           types.String `tfsdk:"id"`
-	SegmentKey   types.String `tfsdk:"segment_key"`
-	Rank         types.Int64  `tfsdk:"rank"`
-	CreatedAt    types.String `tfsdk:"created_at"`
-	UpdatedAt    types.String `tfsdk:"updated_at"`
+	NamespaceKey    types.String `tfsdk:"namespace_key"`
+	FlagKey         types.String `tfsdk:"flag_key"`
+	ID              types.String `tfsdk:"id"`
+	SegmentKeys     types.List   `tfsdk:"segment_keys"`
+	SegmentOperator types.String `tfsdk:"segment_operator"`
+	Rank            types.Int64  `tfsdk:"rank"`
 }
 
 func (r *RuleResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -63,27 +66,25 @@ func (r *RuleResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				},
 			},
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Unique identifier for the rule",
+				MarkdownDescription: "Unique identifier for the rule (auto-generated)",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"segment_key": schema.StringAttribute{
-				MarkdownDescription: "Segment key to evaluate for this rule",
+			"segment_keys": schema.ListAttribute{
+				ElementType:         types.StringType,
+				MarkdownDescription: "List of segment keys to evaluate for this rule",
 				Required:            true,
 			},
-			"rank": schema.Int64Attribute{
-				MarkdownDescription: "Rank/order of the rule",
+			"segment_operator": schema.StringAttribute{
+				MarkdownDescription: "Operator for combining segments (OR_SEGMENT_OPERATOR or AND_SEGMENT_OPERATOR)",
 				Optional:            true,
 				Computed:            true,
 			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the rule was created",
-				Computed:            true,
-			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "Timestamp when the rule was last updated",
+			"rank": schema.Int64Attribute{
+				MarkdownDescription: "Rank/order of the rule (lower ranks are evaluated first)",
+				Optional:            true,
 				Computed:            true,
 			},
 		},
@@ -95,16 +96,17 @@ func (r *RuleResource) Configure(ctx context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	client, ok := req.ProviderData.(*sdk.SDK)
+	providerConfig, ok := req.ProviderData.(*FliptProviderConfig)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *sdk.SDK, got: %T", req.ProviderData),
+			fmt.Sprintf("Expected *FliptProviderConfig, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 
-	r.client = client
+	r.httpClient = providerConfig.HTTPClient
+	r.endpoint = providerConfig.Endpoint
 }
 
 func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -114,35 +116,146 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	rank := int32(1)
-	if !data.Rank.IsNull() {
-		rank = int32(data.Rank.ValueInt64())
+	tflog.Debug(ctx, "Creating rule", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+	})
+
+	// First, get the current flag to read existing rules
+	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
 	}
 
-	createReq := &flipt.CreateRuleRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
-		SegmentKey:   data.SegmentKey.ValueString(),
-		Rank:         rank,
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	rule, err := r.client.Flipt().CreateRule(ctx, createReq)
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Type           string                   `json:"type"`
+				Key            string                   `json:"key"`
+				Name           string                   `json:"name"`
+				Description    string                   `json:"description"`
+				Enabled        bool                     `json:"enabled"`
+				Variants       []map[string]interface{} `json:"variants"`
+				Rules          []map[string]interface{} `json:"rules"`
+				DefaultVariant string                   `json:"defaultVariant"`
+				Metadata       map[string]interface{}   `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse flag response: %s", err))
+		return
+	}
+
+	// Extract segment keys from plan
+	var segmentKeys []string
+	resp.Diagnostics.Append(data.SegmentKeys.ElementsAs(ctx, &segmentKeys, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Generate ID for new rule
+	ruleID := uuid.New().String()
+
+	// Set defaults
+	segmentOperator := "OR_SEGMENT_OPERATOR"
+	if !data.SegmentOperator.IsNull() && !data.SegmentOperator.IsUnknown() {
+		segmentOperator = data.SegmentOperator.ValueString()
+	}
+
+	rank := int64(0)
+	if !data.Rank.IsNull() && !data.Rank.IsUnknown() {
+		rank = data.Rank.ValueInt64()
+	} else {
+		// Auto-assign rank as next available
+		rank = int64(len(flagResponse.Resource.Payload.Rules))
+	}
+
+	// Build new rule
+	newRule := map[string]interface{}{
+		"id":              ruleID,
+		"segments":        segmentKeys,
+		"segmentOperator": segmentOperator,
+		"rank":            rank,
+		"distributions":   []interface{}{}, // Empty distributions array
+	}
+
+	// Add new rule to existing rules
+	existingRules := flagResponse.Resource.Payload.Rules
+	if existingRules == nil {
+		existingRules = []map[string]interface{}{}
+	}
+	allRules := append(existingRules, newRule)
+
+	// Update the flag with all rules (including the new one)
+	flagPayload := map[string]interface{}{
+		"@type":          "flipt.core.Flag",
+		"key":            flagResponse.Resource.Payload.Key,
+		"name":           flagResponse.Resource.Payload.Name,
+		"description":    flagResponse.Resource.Payload.Description,
+		"type":           flagResponse.Resource.Payload.Type,
+		"enabled":        flagResponse.Resource.Payload.Enabled,
+		"variants":       flagResponse.Resource.Payload.Variants,
+		"rules":          allRules,
+		"defaultVariant": flagResponse.Resource.Payload.DefaultVariant,
+		"metadata":       flagResponse.Resource.Payload.Metadata,
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.FlagKey.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create rule, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.ID = types.StringValue(rule.Id)
-	data.SegmentKey = types.StringValue(rule.SegmentKey)
-	data.Rank = types.Int64Value(int64(rule.Rank))
-
-	if rule.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(rule.CreatedAt.AsTime().String())
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to create rule, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
-	if rule.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(rule.UpdatedAt.AsTime().String())
-	}
+	// Set computed values
+	data.ID = types.StringValue(ruleID)
+	data.SegmentOperator = types.StringValue(segmentOperator)
+	data.Rank = types.Int64Value(rank)
 
 	tflog.Trace(ctx, "created a rule resource")
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -155,38 +268,86 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	rulesResp, err := r.client.Flipt().ListRules(ctx, &flipt.ListRuleRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
+	tflog.Debug(ctx, "Reading rule", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"rule_id":       data.ID.ValueString(),
 	})
+
+	// Get the flag to read its rules
+	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	// Find the rule in the rules list
-	var foundRule *flipt.Rule
-	for _, rule := range rulesResp.Rules {
-		if rule.Id == data.ID.ValueString() {
-			foundRule = rule
-			break
-		}
-	}
-
-	if foundRule == nil {
+	if httpResp.StatusCode == http.StatusNotFound {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	data.SegmentKey = types.StringValue(foundRule.SegmentKey)
-	data.Rank = types.Int64Value(int64(foundRule.Rank))
-
-	if foundRule.CreatedAt != nil {
-		data.CreatedAt = types.StringValue(foundRule.CreatedAt.AsTime().String())
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
 	}
 
-	if foundRule.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(foundRule.UpdatedAt.AsTime().String())
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Rules []struct {
+					ID              string   `json:"id"`
+					Segments        []string `json:"segments"`
+					SegmentOperator string   `json:"segmentOperator"`
+					Rank            int64    `json:"rank"`
+				} `json:"rules"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	// Find the rule by ID
+	var found bool
+	for _, rule := range flagResponse.Resource.Payload.Rules {
+		if rule.ID == data.ID.ValueString() {
+			found = true
+
+			// Convert segments to types.List
+			segmentsList, diags := types.ListValueFrom(ctx, types.StringType, rule.Segments)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			data.SegmentKeys = segmentsList
+
+			data.SegmentOperator = types.StringValue(rule.SegmentOperator)
+			data.Rank = types.Int64Value(rule.Rank)
+			break
+		}
+	}
+
+	if !found {
+		resp.State.RemoveResource(ctx)
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -199,26 +360,145 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	updateReq := &flipt.UpdateRuleRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
-		Id:           data.ID.ValueString(),
-		SegmentKey:   data.SegmentKey.ValueString(),
+	tflog.Debug(ctx, "Updating rule", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"rule_id":       data.ID.ValueString(),
+	})
+
+	// First, get the current flag to read all rules
+	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
 	}
 
-	rule, err := r.client.Flipt().UpdateRule(ctx, updateReq)
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Type           string                   `json:"type"`
+				Key            string                   `json:"key"`
+				Name           string                   `json:"name"`
+				Description    string                   `json:"description"`
+				Enabled        bool                     `json:"enabled"`
+				Variants       []map[string]interface{} `json:"variants"`
+				Rules          []map[string]interface{} `json:"rules"`
+				DefaultVariant string                   `json:"defaultVariant"`
+				Metadata       map[string]interface{}   `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse flag response: %s", err))
+		return
+	}
+
+	// Extract segment keys from plan
+	var segmentKeys []string
+	resp.Diagnostics.Append(data.SegmentKeys.ElementsAs(ctx, &segmentKeys, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Find and update the rule in the rules array
+	var found bool
+	existingRules := flagResponse.Resource.Payload.Rules
+	if existingRules == nil {
+		existingRules = []map[string]interface{}{}
+	}
+
+	for i, rule := range existingRules {
+		if id, ok := rule["id"].(string); ok && id == data.ID.ValueString() {
+			found = true
+
+			// Preserve distributions if they exist
+			distributions := rule["distributions"]
+			if distributions == nil {
+				distributions = []interface{}{}
+			}
+
+			// Update the rule
+			existingRules[i] = map[string]interface{}{
+				"id":              data.ID.ValueString(),
+				"segments":        segmentKeys,
+				"segmentOperator": data.SegmentOperator.ValueString(),
+				"rank":            data.Rank.ValueInt64(),
+				"distributions":   distributions,
+			}
+			break
+		}
+	}
+
+	if !found {
+		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Rule with ID %s not found in flag", data.ID.ValueString()))
+		return
+	}
+
+	// Update the flag with all rules (including the modified one)
+	flagPayload := map[string]interface{}{
+		"@type":          "flipt.core.Flag",
+		"key":            flagResponse.Resource.Payload.Key,
+		"name":           flagResponse.Resource.Payload.Name,
+		"description":    flagResponse.Resource.Payload.Description,
+		"type":           flagResponse.Resource.Payload.Type,
+		"enabled":        flagResponse.Resource.Payload.Enabled,
+		"variants":       flagResponse.Resource.Payload.Variants,
+		"rules":          existingRules,
+		"defaultVariant": flagResponse.Resource.Payload.DefaultVariant,
+		"metadata":       flagResponse.Resource.Payload.Metadata,
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.FlagKey.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update rule, got error: %s", err))
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.SegmentKey = types.StringValue(rule.SegmentKey)
-	data.Rank = types.Int64Value(int64(rule.Rank))
-
-	if rule.UpdatedAt != nil {
-		data.UpdatedAt = types.StringValue(rule.UpdatedAt.AsTime().String())
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update rule, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
 	}
 
+	tflog.Trace(ctx, "updated a rule resource")
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -229,13 +509,119 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	err := r.client.Flipt().DeleteRule(ctx, &flipt.DeleteRuleRequest{
-		NamespaceKey: data.NamespaceKey.ValueString(),
-		FlagKey:      data.FlagKey.ValueString(),
-		Id:           data.ID.ValueString(),
+	tflog.Debug(ctx, "Deleting rule", map[string]interface{}{
+		"namespace_key": data.NamespaceKey.ValueString(),
+		"flag_key":      data.FlagKey.ValueString(),
+		"rule_id":       data.ID.ValueString(),
 	})
+
+	// First, get the current flag to read all rules
+	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+
+	httpResp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		// If flag doesn't exist, rule is already gone
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode == http.StatusNotFound {
+		// Flag doesn't exist, rule is already gone
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read flag, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var flagResponse struct {
+		Resource struct {
+			Payload struct {
+				Type           string                   `json:"type"`
+				Key            string                   `json:"key"`
+				Name           string                   `json:"name"`
+				Description    string                   `json:"description"`
+				Enabled        bool                     `json:"enabled"`
+				Variants       []map[string]interface{} `json:"variants"`
+				Rules          []map[string]interface{} `json:"rules"`
+				DefaultVariant string                   `json:"defaultVariant"`
+				Metadata       map[string]interface{}   `json:"metadata"`
+			} `json:"payload"`
+		} `json:"resource"`
+	}
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if err := json.Unmarshal(body, &flagResponse); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse flag response: %s", err))
+		return
+	}
+
+	// Remove the rule from the rules array
+	existingRules := flagResponse.Resource.Payload.Rules
+	if existingRules == nil {
+		// No rules, already deleted
+		return
+	}
+
+	var updatedRules []map[string]interface{}
+	for _, rule := range existingRules {
+		if id, ok := rule["id"].(string); ok && id != data.ID.ValueString() {
+			updatedRules = append(updatedRules, rule)
+		}
+	}
+
+	// Update the flag without the deleted rule
+	flagPayload := map[string]interface{}{
+		"@type":          "flipt.core.Flag",
+		"key":            flagResponse.Resource.Payload.Key,
+		"name":           flagResponse.Resource.Payload.Name,
+		"description":    flagResponse.Resource.Payload.Description,
+		"type":           flagResponse.Resource.Payload.Type,
+		"enabled":        flagResponse.Resource.Payload.Enabled,
+		"variants":       flagResponse.Resource.Payload.Variants,
+		"rules":          updatedRules,
+		"defaultVariant": flagResponse.Resource.Payload.DefaultVariant,
+		"metadata":       flagResponse.Resource.Payload.Metadata,
+	}
+
+	updateReq := map[string]interface{}{
+		"key":     data.FlagKey.ValueString(),
+		"payload": flagPayload,
+	}
+
+	reqBody, err := json.Marshal(updateReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Serialization Error", fmt.Sprintf("Unable to marshal request: %s", err))
+		return
+	}
+
+	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	httpResp, err = r.httpClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete rule, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	body, _ = io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to delete rule, status: %d, body: %s", httpResp.StatusCode, string(body)))
 		return
 	}
 

@@ -19,16 +19,10 @@ Flipt variant resource (belongs to a flag)
 
 - `flag_key` (String) Flag key that this variant belongs to
 - `key` (String) Unique key for the variant
-- `name` (String) Display name of the variant
 - `namespace_key` (String) Namespace key where the flag belongs
 
 ### Optional
 
 - `attachment` (String) JSON attachment data for the variant
 - `description` (String) Description of the variant
-
-### Read-Only
-
-- `created_at` (String) Timestamp when the variant was created
-- `id` (String) Unique identifier for the variant
-- `updated_at` (String) Timestamp when the variant was last updated
+- `name` (String) Display name of the variant
