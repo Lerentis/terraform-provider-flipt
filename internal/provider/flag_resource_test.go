@@ -89,7 +89,7 @@ func TestFlagResourceHTTP(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodGet:
 			w.WriteHeader(http.StatusOK)
 			response := map[string]interface{}{
@@ -109,7 +109,7 @@ func TestFlagResourceHTTP(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodPut:
 			w.WriteHeader(http.StatusOK)
 			response := map[string]interface{}{
@@ -129,7 +129,7 @@ func TestFlagResourceHTTP(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 		}

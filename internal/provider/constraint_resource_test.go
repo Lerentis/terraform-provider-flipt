@@ -97,7 +97,7 @@ func TestConstraintResourceHTTP(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodPut:
 			w.WriteHeader(http.StatusOK)
 			response := map[string]interface{}{
@@ -122,7 +122,7 @@ func TestConstraintResourceHTTP(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		}
 	}))
 	defer server.Close()

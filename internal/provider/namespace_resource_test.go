@@ -84,7 +84,7 @@ func TestNamespaceResourceCRUD(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodGet:
 			// Handle Read
 			w.WriteHeader(http.StatusOK)
@@ -101,7 +101,7 @@ func TestNamespaceResourceCRUD(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodPut:
 			// Handle Update
 			w.WriteHeader(http.StatusOK)
@@ -118,7 +118,7 @@ func TestNamespaceResourceCRUD(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		case http.MethodDelete:
 			// Handle Delete
 			w.WriteHeader(http.StatusOK)

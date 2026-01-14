@@ -93,12 +93,12 @@ func TestProviderResources(t *testing.T) {
 	}
 }
 
-// testAccProtoV6ProviderFactories is used for acceptance testing
+// testAccProtoV6ProviderFactories is used for acceptance testing.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
 	"flipt": providerserver.NewProtocol6WithError(New("test")()),
 }
 
-// testAccPreCheck runs before each acceptance test
+// testAccPreCheck runs before each acceptance test.
 func testAccPreCheck(t *testing.T) {
 	// Check that a Flipt instance is running and accessible
 	// This would typically check for FLIPT_ENDPOINT environment variable
