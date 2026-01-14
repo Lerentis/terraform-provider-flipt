@@ -40,6 +40,10 @@ func TestAccRuleResource(t *testing.T) {
 
 func testAccRuleResourceConfig(envKey, namespaceKey, flagKey, segmentKey, operator string) string {
 	return `
+provider "flipt" {
+  endpoint = "http://localhost:8080"
+}
+
 resource "flipt_namespace" "test" {
   environment_key = "` + envKey + `"
   key             = "` + namespaceKey + `"

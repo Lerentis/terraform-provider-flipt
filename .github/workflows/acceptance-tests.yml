@@ -1,0 +1,72 @@
+# Terraform Provider Acceptance Testing workflow.
+# This workflow runs acceptance tests against a real Flipt instance.
+# It can be triggered manually via workflow_dispatch.
+name: Acceptance Tests
+
+on:
+  workflow_dispatch:  # Manual trigger only
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance-test:
+    name: Terraform Provider Acceptance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    services:
+      flipt:
+        image: docker.flipt.io/flipt/flipt:v2.4.0
+        ports:
+          - 8080:8080
+        options: >-
+          --health-cmd "wget --quiet --tries=1 --spider http://localhost:8080/api/v2/environments || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform:
+          - '1.0.*'
+          - '1.1.*'
+          - '1.2.*'
+    
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      
+      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+      
+      - name: Wait for Flipt to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -f http://localhost:8080/api/v2/environments; then
+              echo "Flipt is ready!"
+              exit 0
+            fi
+            echo "Waiting for Flipt... ($i/30)"
+            sleep 2
+          done
+          echo "Flipt failed to start"
+          exit 1
+      
+      - run: go mod download
+      
+      - name: Run Acceptance Tests
+        env:
+          TF_ACC: "1"
+          FLIPT_ENDPOINT: "http://localhost:8080"
+        run: go test -v -cover -timeout 20m ./internal/provider/

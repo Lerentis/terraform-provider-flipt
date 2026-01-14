@@ -4,6 +4,8 @@
 package provider
 
 import (
+	"net/http"
+	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
@@ -100,7 +102,27 @@ var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServe
 
 // testAccPreCheck runs before each acceptance test.
 func testAccPreCheck(t *testing.T) {
-	// Check that a Flipt instance is running and accessible
-	// This would typically check for FLIPT_ENDPOINT environment variable
-	// or ensure localhost:8080 is available
+	t.Helper()
+
+	// Skip acceptance tests if TF_ACC is not set
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Acceptance tests skipped unless TF_ACC is set")
+	}
+
+	// Check if Flipt instance is accessible
+	endpoint := os.Getenv("FLIPT_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "http://localhost:8080"
+	}
+
+	// Try to connect to Flipt
+	resp, err := http.Get(endpoint + "/api/v2/environments")
+	if err != nil {
+		t.Skipf("Flipt instance not accessible at %s: %v. Start Flipt with 'docker compose up' in hack/ directory", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Skipf("Flipt instance at %s returned status %d, expected 200", endpoint, resp.StatusCode)
+	}
 }
