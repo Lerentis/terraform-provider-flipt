@@ -5,14 +5,15 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	sdk "go.flipt.io/flipt/sdk/go"
 )
 
 var _ datasource.DataSource = &EnvironmentDataSource{}
@@ -24,7 +25,6 @@ func NewEnvironmentDataSource() datasource.DataSource {
 type EnvironmentDataSource struct {
 	httpClient *http.Client
 	endpoint   string
-	client     *sdk.SDK // TODO: Remove when migrated to manual HTTP
 }
 
 type EnvironmentDataSourceModel struct {
@@ -40,6 +40,7 @@ func (d *EnvironmentDataSource) Metadata(ctx context.Context, req datasource.Met
 func (d *EnvironmentDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Flipt environment data source. Environments are read-only and configured server-side.",
+		Description:         "Flipt environment data source",
 
 		Attributes: map[string]schema.Attribute{
 			"key": schema.StringAttribute{
@@ -74,30 +75,74 @@ func (d *EnvironmentDataSource) Configure(ctx context.Context, req datasource.Co
 
 	d.httpClient = providerConfig.HTTPClient
 	d.endpoint = providerConfig.Endpoint
-	d.client = providerConfig.SDKClient // TODO: Remove when migrated to manual HTTP
 }
 
 func (d *EnvironmentDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data EnvironmentDataSourceModel
+
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Environments are read-only in Flipt v2 and are configured server-side
-	// We validate that the requested environment key exists by listing all environments
-	// Note: The SDK doesn't have a direct GetEnvironment method, environments are managed via configuration
+	tflog.Debug(ctx, "Reading environment", map[string]interface{}{
+		"key": data.Key.ValueString(),
+	})
 
-	// For now, we'll accept any key value and set basic information
-	// In a production scenario, you might want to validate against server configuration
-	data.Key = types.StringValue(data.Key.ValueString())
-	data.Name = types.StringValue(data.Key.ValueString())
+	// List all environments and find the requested one
+	url := fmt.Sprintf("%s/api/v2/environments", d.endpoint)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
+		return
+	}
 
-	// Check if this is the default environment
-	if data.Key.ValueString() == "default" {
-		data.Default = types.BoolValue(true)
-	} else {
-		data.Default = types.BoolValue(false)
+	httpResp, err := d.httpClient.Do(httpReq)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read environments, got error: %s", err))
+		return
+	}
+	defer httpResp.Body.Close()
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Diagnostics.AddError("Read Error", fmt.Sprintf("Unable to read response: %s", err))
+		return
+	}
+
+	if httpResp.StatusCode != http.StatusOK {
+		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to read environments, status: %d, body: %s", httpResp.StatusCode, string(body)))
+		return
+	}
+
+	var response struct {
+		Environments []struct {
+			Key     string `json:"key"`
+			Name    string `json:"name"`
+			Default bool   `json:"default"`
+		} `json:"environments"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		resp.Diagnostics.AddError("Parse Error", fmt.Sprintf("Unable to parse response: %s", err))
+		return
+	}
+
+	// Find the requested environment by key
+	var found bool
+	for _, env := range response.Environments {
+		if env.Key == data.Key.ValueString() {
+			data.Key = types.StringValue(env.Key)
+			data.Name = types.StringValue(env.Name)
+			data.Default = types.BoolValue(env.Default)
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Environment with key '%s' not found", data.Key.ValueString()))
+		return
 	}
 
 	tflog.Trace(ctx, "read an environment data source")

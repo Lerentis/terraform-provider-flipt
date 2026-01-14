@@ -6,16 +6,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/terraform-plugin-framework v1.17.0
 	github.com/hashicorp/terraform-plugin-log v0.10.0
-	go.flipt.io/flipt/sdk/go v0.13.0
-)
-
-require (
-	github.com/google/gnostic-models v0.6.9 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3 // indirect
-	go.flipt.io/flipt/errors v1.45.0 // indirect
-	go.flipt.io/flipt/rpc/flipt v1.54.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20250728155136-f173205681a0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (

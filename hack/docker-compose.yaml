@@ -1,0 +1,12 @@
+# Copyright (c) terraform-flipt contributors
+# SPDX-License-Identifier: MIT
+
+services:
+  flipt:
+    image: docker.flipt.io/flipt/flipt:v2
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    volumes:
+      - ./config/config.yaml:/etc/flipt/config/config.yaml
+    command: ["/flipt", "server", "--config", "/etc/flipt/config/config.yaml"]

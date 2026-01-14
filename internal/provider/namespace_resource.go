@@ -145,7 +145,7 @@ func (r *NamespaceResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	url := fmt.Sprintf("%s/namespaces", r.endpoint)
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces", r.endpoint, envKey)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -264,7 +264,7 @@ func (r *NamespaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 	})
 
 	// Get the namespace from Flipt
-	url := fmt.Sprintf("%s/namespaces/%s", r.endpoint, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.endpoint, envKey, data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -367,7 +367,7 @@ func (r *NamespaceResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	url := fmt.Sprintf("%s/namespaces/%s", r.endpoint, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.endpoint, envKey, data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -466,7 +466,7 @@ func (r *NamespaceResource) Delete(ctx context.Context, req resource.DeleteReque
 	})
 
 	// Delete the namespace
-	url := fmt.Sprintf("%s/namespaces/%s", r.endpoint, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.endpoint, envKey, data.Key.ValueString())
 
 	tflog.Debug(ctx, "Making DELETE request", map[string]interface{}{
 		"method":          "DELETE",

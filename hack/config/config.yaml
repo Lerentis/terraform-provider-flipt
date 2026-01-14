@@ -1,0 +1,47 @@
+# Copyright (c) terraform-flipt contributors
+# SPDX-License-Identifier: MIT
+
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flipt-io/flipt/v2/config/flipt.schema.json
+
+version: "2.0"
+diagnostics:
+  profiling:
+    enabled: true
+log:
+  level: INFO
+  encoding: console
+  grpc_level: ERROR
+meta:
+  check_for_updates: true
+  telemetry_enabled: true
+server:
+  host: 0.0.0.0
+  protocol: http
+  http_port: 8080
+  https_port: 443
+  grpc_port: 9000
+environments:
+  local: # id
+    name: "local"
+    default: true
+    storage: "default"
+  staging: # id
+    name: "staging"
+    storage: "staging"
+storage:
+  default:
+    backend:
+      type: memory
+    branch: main
+    poll_interval: 30s
+  staging:
+    backend:
+      type: memory
+    branch: main
+    poll_interval: 30s
+metrics:
+  enabled: true
+  exporter: prometheus
+ui:
+  enabled: true
+  default_theme: system

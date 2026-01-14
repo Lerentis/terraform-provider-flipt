@@ -12,8 +12,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	sdk "go.flipt.io/flipt/sdk/go"
-	sdkhttp "go.flipt.io/flipt/sdk/go/http"
 )
 
 // Ensure FliptProvider satisfies various provider interfaces.
@@ -29,15 +27,13 @@ type FliptProvider struct {
 
 // FliptProviderModel describes the provider data model.
 type FliptProviderModel struct {
-	Endpoint       types.String `tfsdk:"endpoint"`
-	EnvironmentKey types.String `tfsdk:"environment_key"`
+	Endpoint types.String `tfsdk:"endpoint"`
 }
 
 // FliptProviderConfig holds the configured HTTP client and endpoint for resources.
 type FliptProviderConfig struct {
 	HTTPClient *http.Client
 	Endpoint   string
-	SDKClient  *sdk.SDK // TODO: Remove when all resources are migrated to manual HTTP
 }
 
 func (p *FliptProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -51,10 +47,6 @@ func (p *FliptProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 			"endpoint": schema.StringAttribute{
 				MarkdownDescription: "Flipt server endpoint URL",
 				Required:            true,
-			},
-			"environment_key": schema.StringAttribute{
-				MarkdownDescription: "Default environment key for Flipt v2 (defaults to 'default')",
-				Optional:            true,
 			},
 		},
 	}
@@ -78,27 +70,16 @@ func (p *FliptProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	// Get environment key, default to "default"
-	envKey := "default"
-	if !data.EnvironmentKey.IsNull() && data.EnvironmentKey.ValueString() != "" {
-		envKey = data.EnvironmentKey.ValueString()
-	}
-
-	// For Flipt v2, append environment path to endpoint
-	endpoint := data.Endpoint.ValueString() + "/api/v2/environments/" + envKey
+	// Use the base endpoint without environment path
+	endpoint := data.Endpoint.ValueString()
 
 	// Create HTTP client
 	httpClient := &http.Client{}
-
-	// Create SDK client for unmigrated resources (TODO: Remove when all migrated)
-	sdkTransport := sdkhttp.NewTransport(data.Endpoint.ValueString())
-	sdkClient := sdk.New(sdkTransport)
 
 	// Create provider configuration
 	config := &FliptProviderConfig{
 		HTTPClient: httpClient,
 		Endpoint:   endpoint,
-		SDKClient:  &sdkClient,
 	}
 
 	resp.DataSourceData = config

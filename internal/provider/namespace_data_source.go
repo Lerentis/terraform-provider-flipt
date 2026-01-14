@@ -108,7 +108,7 @@ func (d *NamespaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 	})
 
 	// Get the namespace from Flipt
-	url := fmt.Sprintf("%s/namespaces/%s", d.endpoint, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", d.endpoint, envKey, data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
