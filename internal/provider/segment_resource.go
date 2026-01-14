@@ -34,11 +34,12 @@ type SegmentResource struct {
 }
 
 type SegmentResourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	Key          types.String `tfsdk:"key"`
-	Name         types.String `tfsdk:"name"`
-	Description  types.String `tfsdk:"description"`
-	MatchType    types.String `tfsdk:"match_type"`
+	NamespaceKey   types.String `tfsdk:"namespace_key"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+	Key            types.String `tfsdk:"key"`
+	Name           types.String `tfsdk:"name"`
+	Description    types.String `tfsdk:"description"`
+	MatchType      types.String `tfsdk:"match_type"`
 }
 
 func (r *SegmentResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -54,6 +55,15 @@ func (r *SegmentResource) Schema(ctx context.Context, req resource.SchemaRequest
 				MarkdownDescription: "Namespace key where the segment belongs",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default')",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
@@ -107,9 +117,16 @@ func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Creating segment", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.Key.ValueString(),
 	})
 
 	// Build segment payload
@@ -138,7 +155,7 @@ func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	url := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -170,13 +187,20 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading segment", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.Key.ValueString(),
 	})
 
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -243,14 +267,21 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Updating segment", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.Key.ValueString(),
 	})
 
 	// Get current segment to preserve constraints
-	getURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	getURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", getURL, nil)
 	if err != nil {
@@ -310,7 +341,7 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -341,13 +372,20 @@ func (r *SegmentResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Deleting segment", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.Key.ValueString(),
 	})
 
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {

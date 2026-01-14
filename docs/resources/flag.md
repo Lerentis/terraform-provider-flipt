@@ -25,5 +25,6 @@ Flipt flag resource
 
 - `description` (String) Description of the flag
 - `enabled` (Boolean) Whether the flag is enabled
+- `environment_key` (String) Environment key (defaults to 'default')
 - `metadata` (Map of String) Metadata key-value pairs for the flag
 - `type` (String) Type of the flag (VARIANT_FLAG_TYPE or BOOLEAN_FLAG_TYPE)

@@ -28,12 +28,13 @@ type VariantDataSource struct {
 }
 
 type VariantDataSourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	FlagKey      types.String `tfsdk:"flag_key"`
-	Key          types.String `tfsdk:"key"`
-	Name         types.String `tfsdk:"name"`
-	Description  types.String `tfsdk:"description"`
-	Attachment   types.String `tfsdk:"attachment"`
+	NamespaceKey   types.String `tfsdk:"namespace_key"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+	FlagKey        types.String `tfsdk:"flag_key"`
+	Key            types.String `tfsdk:"key"`
+	Name           types.String `tfsdk:"name"`
+	Description    types.String `tfsdk:"description"`
+	Attachment     types.String `tfsdk:"attachment"`
 }
 
 func (d *VariantDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -50,6 +51,11 @@ func (d *VariantDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 				MarkdownDescription: "Namespace key",
 				Description:         "Namespace key",
 				Required:            true,
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default' if not specified)",
+				Description:         "Environment key (defaults to 'default' if not specified)",
+				Optional:            true,
 			},
 			"flag_key": schema.StringAttribute{
 				MarkdownDescription: "Flag key",
@@ -105,15 +111,22 @@ func (d *VariantDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading variant data source", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"variant_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"variant_key":     data.Key.ValueString(),
 	})
 
 	// Get the flag to read its variants
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		d.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		d.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

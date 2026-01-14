@@ -35,6 +35,7 @@ func NewRuleResource() resource.Resource {
 
 type RuleResourceModel struct {
 	NamespaceKey    types.String `tfsdk:"namespace_key"`
+	EnvironmentKey  types.String `tfsdk:"environment_key"`
 	FlagKey         types.String `tfsdk:"flag_key"`
 	ID              types.String `tfsdk:"id"`
 	SegmentKeys     types.List   `tfsdk:"segment_keys"`
@@ -55,6 +56,15 @@ func (r *RuleResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				MarkdownDescription: "Namespace key where the flag belongs",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default' if not specified)",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
@@ -116,14 +126,21 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Creating rule", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
 	})
 
 	// First, get the current flag to read existing rules
-	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -231,7 +248,7 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -268,15 +285,22 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading rule", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"rule_id":       data.ID.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"rule_id":         data.ID.ValueString(),
 	})
 
 	// Get the flag to read its rules
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -360,15 +384,22 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Updating rule", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"rule_id":       data.ID.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"rule_id":         data.ID.ValueString(),
 	})
 
-	// First, get the current flag to read all rules
-	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	// Get the current flag to read existing rules
+	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -477,7 +508,7 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -509,15 +540,22 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Deleting rule", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"rule_id":       data.ID.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"rule_id":         data.ID.ValueString(),
 	})
 
-	// First, get the current flag to read all rules
-	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	// Get the current flag to read existing rules
+	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -604,7 +642,7 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))

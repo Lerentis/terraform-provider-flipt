@@ -21,6 +21,10 @@ Flipt variant data source
 - `key` (String) Variant key
 - `namespace_key` (String) Namespace key
 
+### Optional
+
+- `environment_key` (String) Environment key (defaults to 'default' if not specified)
+
 ### Read-Only
 
 - `attachment` (String) Variant attachment (JSON string)

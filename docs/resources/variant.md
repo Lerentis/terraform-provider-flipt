@@ -25,4 +25,5 @@ Flipt variant resource (belongs to a flag)
 
 - `attachment` (String) JSON attachment data for the variant
 - `description` (String) Description of the variant
+- `environment_key` (String) Environment key (defaults to 'default' if not specified)
 - `name` (String) Display name of the variant

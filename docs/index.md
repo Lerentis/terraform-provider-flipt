@@ -25,7 +25,3 @@ provider "flipt" {
 ### Required
 
 - `endpoint` (String) Flipt server endpoint URL
-
-### Optional
-
-- `environment_key` (String) Default environment key for Flipt v2 (defaults to 'default')

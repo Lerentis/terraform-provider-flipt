@@ -23,6 +23,7 @@ Flipt rule resource (belongs to a flag)
 
 ### Optional
 
+- `environment_key` (String) Environment key (defaults to 'default' if not specified)
 - `rank` (Number) Rank/order of the rule (lower ranks are evaluated first)
 - `segment_operator` (String) Operator for combining segments (OR_SEGMENT_OPERATOR or AND_SEGMENT_OPERATOR)
 

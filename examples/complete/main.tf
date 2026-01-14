@@ -56,19 +56,21 @@ output "namespace_protected" {
 
 # # Create a feature flag
 resource "flipt_flag" "new_ui" {
-  namespace_key = flipt_namespace.production.key
-  key           = "new-ui"
-  name          = "New UI"
-  description   = "Enable the new user interface"
-  enabled       = true
-  type          = "VARIANT_FLAG_TYPE"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = "new-ui"
+  name            = "New UI"
+  description     = "Enable the new user interface"
+  enabled         = true
+  type            = "VARIANT_FLAG_TYPE"
 }
 
 # Read flag data source (after creation)
 data "flipt_flag" "new_ui_data" {
-  namespace_key = flipt_namespace.production.key
-  key           = flipt_flag.new_ui.key
-  depends_on    = [flipt_flag.new_ui]
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = flipt_flag.new_ui.key
+  depends_on      = [flipt_flag.new_ui]
 }
 
 output "flag_type" {
@@ -83,29 +85,32 @@ output "flag_enabled" {
 
 # # Create variants for the flag
 resource "flipt_variant" "ui_blue" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.new_ui.key
-  key           = "blue"
-  name          = "Blue Theme"
-  description   = "Blue color scheme"
-  attachment    = jsonencode({ theme = "blue", font = "sans-serif" })
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  flag_key        = flipt_flag.new_ui.key
+  key             = "blue"
+  name            = "Blue Theme"
+  description     = "Blue color scheme"
+  attachment      = jsonencode({ theme = "blue", font = "sans-serif" })
 }
 
 resource "flipt_variant" "ui_green" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.new_ui.key
-  key           = "green"
-  name          = "Green Theme"
-  description   = "Green color scheme"
-  attachment    = jsonencode({ theme = "green", font = "serif" })
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  flag_key        = flipt_flag.new_ui.key
+  key             = "green"
+  name            = "Green Theme"
+  description     = "Green color scheme"
+  attachment      = jsonencode({ theme = "green", font = "serif" })
 }
 
 # Read variant data source (after creation)
 data "flipt_variant" "ui_blue_data" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.new_ui.key
-  key           = flipt_variant.ui_blue.key
-  depends_on    = [flipt_variant.ui_blue]
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  flag_key        = flipt_flag.new_ui.key
+  key             = flipt_variant.ui_blue.key
+  depends_on      = [flipt_variant.ui_blue]
 }
 
 output "variant_attachment" {
@@ -115,18 +120,20 @@ output "variant_attachment" {
 
 # Create a segment
 resource "flipt_segment" "beta_users" {
-  namespace_key = flipt_namespace.production.key
-  key           = "beta-users"
-  name          = "Beta Users"
-  description   = "Users enrolled in beta program"
-  match_type    = "ALL_MATCH_TYPE"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = "beta-users"
+  name            = "Beta Users"
+  description     = "Users enrolled in beta program"
+  match_type      = "ALL_MATCH_TYPE"
 }
 
 # Read segment data source (after creation)
 data "flipt_segment" "beta_users_data" {
-  namespace_key = flipt_namespace.production.key
-  key           = flipt_segment.beta_users.key
-  depends_on    = [flipt_segment.beta_users]
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = flipt_segment.beta_users.key
+  depends_on      = [flipt_segment.beta_users]
 }
 
 output "segment_match_type" {
@@ -136,18 +143,20 @@ output "segment_match_type" {
 
 # Add constraints to the segment
 resource "flipt_constraint" "beta_user_email" {
-  namespace_key = flipt_namespace.production.key
-  segment_key   = flipt_segment.beta_users.key
-  type          = "STRING_COMPARISON_TYPE"
-  property      = "email"
-  operator      = "suffix"
-  value         = "@beta.example.com"
-  description   = "Match beta email addresses"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  segment_key     = flipt_segment.beta_users.key
+  type            = "STRING_COMPARISON_TYPE"
+  property        = "email"
+  operator        = "suffix"
+  value           = "@beta.example.com"
+  description     = "Match beta email addresses"
 }
 
 # Create a rule linking the flag and segment
 resource "flipt_rule" "beta_ui_rule" {
   namespace_key    = flipt_namespace.production.key
+  environment_key  = "local"
   flag_key         = flipt_flag.new_ui.key
   segment_keys     = [flipt_segment.beta_users.key]
   segment_operator = "OR_SEGMENT_OPERATOR"
@@ -156,12 +165,13 @@ resource "flipt_rule" "beta_ui_rule" {
 
 # # Boolean flag example
 resource "flipt_flag" "maintenance_mode" {
-  namespace_key = flipt_namespace.production.key
-  key           = "maintenance-mode"
-  name          = "Maintenance Mode"
-  description   = "Enable maintenance mode"
-  enabled       = false
-  type          = "BOOLEAN_FLAG_TYPE"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = "maintenance-mode"
+  name            = "Maintenance Mode"
+  description     = "Enable maintenance mode"
+  enabled         = false
+  type            = "BOOLEAN_FLAG_TYPE"
 }
 
 # ============================================
@@ -170,32 +180,35 @@ resource "flipt_flag" "maintenance_mode" {
 
 # Create another segment for OR operator testing
 resource "flipt_segment" "premium_users" {
-  namespace_key = flipt_namespace.production.key
-  key           = "premium-users"
-  name          = "Premium Users"
-  description   = "Users with premium subscription"
-  match_type    = "ANY_MATCH_TYPE"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = "premium-users"
+  name            = "Premium Users"
+  description     = "Users with premium subscription"
+  match_type      = "ANY_MATCH_TYPE"
 }
 
 # Add constraint for premium users
 resource "flipt_constraint" "premium_user_plan" {
-  namespace_key = flipt_namespace.production.key
-  segment_key   = flipt_segment.premium_users.key
-  type          = "STRING_COMPARISON_TYPE"
-  property      = "plan"
-  operator      = "eq"
-  value         = "premium"
-  description   = "Match premium plan users"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  segment_key     = flipt_segment.premium_users.key
+  type            = "STRING_COMPARISON_TYPE"
+  property        = "plan"
+  operator        = "eq"
+  value           = "premium"
+  description     = "Match premium plan users"
 }
 
 # Create a flag with metadata
 resource "flipt_flag" "experimental_features" {
-  namespace_key = flipt_namespace.production.key
-  key           = "experimental-features"
-  name          = "Experimental Features"
-  description   = "Toggle experimental features"
-  enabled       = true
-  type          = "VARIANT_FLAG_TYPE"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  key             = "experimental-features"
+  name            = "Experimental Features"
+  description     = "Toggle experimental features"
+  enabled         = true
+  type            = "VARIANT_FLAG_TYPE"
   metadata = {
     team  = "platform"
     stage = "alpha"
@@ -204,24 +217,27 @@ resource "flipt_flag" "experimental_features" {
 
 # Create variants for experimental features
 resource "flipt_variant" "experimental_on" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.experimental_features.key
-  key           = "on"
-  name          = "Features On"
-  description   = "All experimental features enabled"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  flag_key        = flipt_flag.experimental_features.key
+  key             = "on"
+  name            = "Features On"
+  description     = "All experimental features enabled"
 }
 
 resource "flipt_variant" "experimental_off" {
-  namespace_key = flipt_namespace.production.key
-  flag_key      = flipt_flag.experimental_features.key
-  key           = "off"
-  name          = "Features Off"
-  description   = "All experimental features disabled"
+  namespace_key   = flipt_namespace.production.key
+  environment_key = "local"
+  flag_key        = flipt_flag.experimental_features.key
+  key             = "off"
+  name            = "Features Off"
+  description     = "All experimental features disabled"
 }
 
 # Create a rule with multiple segments (OR operator)
 resource "flipt_rule" "experimental_rule" {
   namespace_key    = flipt_namespace.production.key
+  environment_key  = "local"
   flag_key         = flipt_flag.experimental_features.key
   segment_keys     = [flipt_segment.beta_users.key, flipt_segment.premium_users.key]
   segment_operator = "OR_SEGMENT_OPERATOR"

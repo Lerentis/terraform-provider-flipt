@@ -28,11 +28,12 @@ type SegmentDataSource struct {
 }
 
 type SegmentDataSourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	Key          types.String `tfsdk:"key"`
-	Name         types.String `tfsdk:"name"`
-	Description  types.String `tfsdk:"description"`
-	MatchType    types.String `tfsdk:"match_type"`
+	NamespaceKey   types.String `tfsdk:"namespace_key"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+	Key            types.String `tfsdk:"key"`
+	Name           types.String `tfsdk:"name"`
+	Description    types.String `tfsdk:"description"`
+	MatchType      types.String `tfsdk:"match_type"`
 }
 
 func (d *SegmentDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -49,6 +50,11 @@ func (d *SegmentDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 				MarkdownDescription: "Namespace key",
 				Description:         "Namespace key",
 				Required:            true,
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default' if not specified)",
+				Description:         "Environment key (defaults to 'default' if not specified)",
+				Optional:            true,
 			},
 			"key": schema.StringAttribute{
 				MarkdownDescription: "Segment key",
@@ -99,13 +105,20 @@ func (d *SegmentDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading segment data source", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.Key.ValueString(),
 	})
 
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		d.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		d.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

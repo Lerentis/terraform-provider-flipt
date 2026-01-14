@@ -35,13 +35,14 @@ type FlagResource struct {
 }
 
 type FlagResourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	Key          types.String `tfsdk:"key"`
-	Name         types.String `tfsdk:"name"`
-	Description  types.String `tfsdk:"description"`
-	Enabled      types.Bool   `tfsdk:"enabled"`
-	Type         types.String `tfsdk:"type"`
-	Metadata     types.Map    `tfsdk:"metadata"`
+	NamespaceKey   types.String `tfsdk:"namespace_key"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+	Key            types.String `tfsdk:"key"`
+	Name           types.String `tfsdk:"name"`
+	Description    types.String `tfsdk:"description"`
+	Enabled        types.Bool   `tfsdk:"enabled"`
+	Type           types.String `tfsdk:"type"`
+	Metadata       types.Map    `tfsdk:"metadata"`
 }
 
 func (r *FlagResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -57,6 +58,15 @@ func (r *FlagResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				MarkdownDescription: "Namespace key where the flag belongs",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default')",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
@@ -121,10 +131,18 @@ func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
+	// Default to "default" environment if not specified
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+	data.EnvironmentKey = types.StringValue(envKey)
+
 	tflog.Debug(ctx, "Creating flag", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"key":           data.Key.ValueString(),
-		"name":          data.Name.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"key":             data.Key.ValueString(),
+		"name":            data.Name.ValueString(),
 	})
 
 	// Build flag payload
@@ -170,7 +188,7 @@ func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	url := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -254,13 +272,20 @@ func (r *FlagResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
+	// Default to "default" environment if not specified
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading flag", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"key":           data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"key":             data.Key.ValueString(),
 	})
 
 	// GET URL includes flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -351,10 +376,18 @@ func (r *FlagResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
+	// Default to "default" environment if not specified
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+	data.EnvironmentKey = types.StringValue(envKey)
+
 	tflog.Debug(ctx, "Updating flag", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"key":           data.Key.ValueString(),
-		"name":          data.Name.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"key":             data.Key.ValueString(),
+		"name":            data.Name.ValueString(),
 	})
 
 	// Build flag payload
@@ -400,7 +433,7 @@ func (r *FlagResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	// PUT URL doesn't include the flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -492,13 +525,20 @@ func (r *FlagResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
+	// Default to "default" environment if not specified
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Deleting flag", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"key":           data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"key":             data.Key.ValueString(),
 	})
 
 	// DELETE URL includes flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))

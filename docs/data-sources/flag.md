@@ -20,6 +20,10 @@ Flipt flag data source
 - `key` (String) Unique key for the flag
 - `namespace_key` (String) Namespace key where the flag belongs
 
+### Optional
+
+- `environment_key` (String) Environment key (defaults to 'default' if not specified)
+
 ### Read-Only
 
 - `description` (String) Description of the flag

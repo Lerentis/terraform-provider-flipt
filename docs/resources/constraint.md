@@ -27,3 +27,4 @@ Flipt constraint resource (belongs to a segment)
 ### Optional
 
 - `description` (String) Description of the constraint
+- `environment_key` (String) Environment key (defaults to 'default' if not specified)

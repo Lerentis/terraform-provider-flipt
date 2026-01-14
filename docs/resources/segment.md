@@ -24,4 +24,5 @@ Flipt segment resource
 ### Optional
 
 - `description` (String) Description of the segment
+- `environment_key` (String) Environment key (defaults to 'default')
 - `match_type` (String) Match type for the segment (ALL_MATCH_TYPE or ANY_MATCH_TYPE)

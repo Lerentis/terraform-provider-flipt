@@ -33,12 +33,13 @@ type VariantResource struct {
 }
 
 type VariantResourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	FlagKey      types.String `tfsdk:"flag_key"`
-	Key          types.String `tfsdk:"key"`
-	Name         types.String `tfsdk:"name"`
-	Description  types.String `tfsdk:"description"`
-	Attachment   types.String `tfsdk:"attachment"`
+	NamespaceKey   types.String `tfsdk:"namespace_key"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+	FlagKey        types.String `tfsdk:"flag_key"`
+	Key            types.String `tfsdk:"key"`
+	Name           types.String `tfsdk:"name"`
+	Description    types.String `tfsdk:"description"`
+	Attachment     types.String `tfsdk:"attachment"`
 }
 
 func (r *VariantResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -54,6 +55,15 @@ func (r *VariantResource) Schema(ctx context.Context, req resource.SchemaRequest
 				MarkdownDescription: "Namespace key where the flag belongs",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default' if not specified)",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
@@ -112,15 +122,22 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Creating variant", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"variant_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"variant_key":     data.Key.ValueString(),
 	})
 
 	// First, get the current flag to read existing variants
-	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -221,7 +238,7 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -260,15 +277,22 @@ func (r *VariantResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading variant", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"variant_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"variant_key":     data.Key.ValueString(),
 	})
 
 	// Get the flag to read its variants
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -364,15 +388,22 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Updating variant", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"variant_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"variant_key":     data.Key.ValueString(),
 	})
 
 	// Get the current flag to read existing variants
-	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -480,7 +511,7 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -511,15 +542,22 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Deleting variant", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"flag_key":      data.FlagKey.ValueString(),
-		"variant_key":   data.Key.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"flag_key":        data.FlagKey.ValueString(),
+		"variant_key":     data.Key.ValueString(),
 	})
 
 	// Get the current flag to read existing variants
-	flagURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -596,7 +634,7 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))

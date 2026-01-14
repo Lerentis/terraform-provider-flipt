@@ -33,13 +33,14 @@ type ConstraintResource struct {
 }
 
 type ConstraintResourceModel struct {
-	NamespaceKey types.String `tfsdk:"namespace_key"`
-	SegmentKey   types.String `tfsdk:"segment_key"`
-	Property     types.String `tfsdk:"property"`
-	Type         types.String `tfsdk:"type"`
-	Operator     types.String `tfsdk:"operator"`
-	Value        types.String `tfsdk:"value"`
-	Description  types.String `tfsdk:"description"`
+	NamespaceKey   types.String `tfsdk:"namespace_key"`
+	EnvironmentKey types.String `tfsdk:"environment_key"`
+	SegmentKey     types.String `tfsdk:"segment_key"`
+	Property       types.String `tfsdk:"property"`
+	Type           types.String `tfsdk:"type"`
+	Operator       types.String `tfsdk:"operator"`
+	Value          types.String `tfsdk:"value"`
+	Description    types.String `tfsdk:"description"`
 }
 
 func (r *ConstraintResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -55,6 +56,15 @@ func (r *ConstraintResource) Schema(ctx context.Context, req resource.SchemaRequ
 				MarkdownDescription: "Namespace key where the segment belongs",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"environment_key": schema.StringAttribute{
+				MarkdownDescription: "Environment key (defaults to 'default' if not specified)",
+				Optional:            true,
+				Computed:            true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
@@ -117,15 +127,22 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Creating constraint", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.SegmentKey.ValueString(),
-		"property":      data.Property.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.SegmentKey.ValueString(),
+		"property":        data.Property.ValueString(),
 	})
 
 	// First, get the current segment to read existing constraints
-	segmentURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+	segmentURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 	if err != nil {
@@ -206,7 +223,7 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -245,15 +262,22 @@ func (r *ConstraintResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Reading constraint", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.SegmentKey.ValueString(),
-		"property":      data.Property.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.SegmentKey.ValueString(),
+		"property":        data.Property.ValueString(),
 	})
 
 	// Get the segment to read its constraints
-	url := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -337,15 +361,22 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Updating constraint", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.SegmentKey.ValueString(),
-		"property":      data.Property.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.SegmentKey.ValueString(),
+		"property":        data.Property.ValueString(),
 	})
 
-	// First, get the current segment to read all constraints
-	segmentURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+	// Get the current segment to read existing constraints
+	segmentURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 	if err != nil {
@@ -437,7 +468,7 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -470,15 +501,22 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
+	// Determine environment key (default to "default" if not specified)
+	envKey := "default"
+	if !data.EnvironmentKey.IsNull() && !data.EnvironmentKey.IsUnknown() {
+		envKey = data.EnvironmentKey.ValueString()
+	}
+
 	tflog.Debug(ctx, "Deleting constraint", map[string]interface{}{
-		"namespace_key": data.NamespaceKey.ValueString(),
-		"segment_key":   data.SegmentKey.ValueString(),
-		"property":      data.Property.ValueString(),
+		"environment_key": envKey,
+		"namespace_key":   data.NamespaceKey.ValueString(),
+		"segment_key":     data.SegmentKey.ValueString(),
+		"property":        data.Property.ValueString(),
 	})
 
-	// First, get the current segment to read all constraints
-	segmentURL := fmt.Sprintf("%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+	// Get the current segment to read existing constraints
+	segmentURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
+		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 	if err != nil {
@@ -557,7 +595,7 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/namespaces/%s/resources", r.endpoint, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
