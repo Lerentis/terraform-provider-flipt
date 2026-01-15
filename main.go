@@ -1,4 +1,4 @@
-// Copyright (c) terraform-flipt contributors
+// Copyright (c) terraform-provider-flipt contributors
 // SPDX-License-Identifier: MIT
 
 package main
@@ -7,7 +7,7 @@ import (
 	"context"
 	"flag"
 	"log"
-	"terraform-flipt/internal/provider"
+	"terraform-provider-flipt/internal/provider"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )

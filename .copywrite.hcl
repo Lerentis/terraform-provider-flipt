@@ -10,7 +10,7 @@ project {
 
   # (OPTIONAL) Represents the copyright holder used in all statements
   # Default: IBM Corp.
-  copyright_holder = "terraform-flipt contributors"
+  copyright_holder = "terraform-provider-flipt contributors"
 
   # (OPTIONAL) Represents the year that the project initially began
   # This is used as the starting year in copyright statements

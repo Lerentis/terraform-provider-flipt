@@ -1,10 +1,10 @@
 default: fmt lint install generate
 
 build:
-	go build -o terraform-flipt 
+	go build -o terraform-provider-flipt 
 
 install: build
-	cp terraform-flipt ~/go/bin/terraform-provider-flipt
+	cp terraform-provider-flipt ~/go/bin/terraform-provider-flipt
 
 lint:
 	golangci-lint run

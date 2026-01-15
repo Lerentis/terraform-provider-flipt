@@ -1,4 +1,4 @@
-// Copyright (c) terraform-flipt contributors
+// Copyright (c) terraform-provider-flipt contributors
 // SPDX-License-Identifier: MIT
 
 package provider

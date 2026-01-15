@@ -1,2 +1,2 @@
-# terraform-flipt
+# terraform-provider-flipt
 Terraform provider for flipt

@@ -12,7 +12,7 @@ description: |-
 ## Example Usage
 
 ```terraform
-# Copyright (c) terraform-flipt contributors
+# Copyright (c) terraform-provider-flipt contributors
 
 provider "flipt" {
   # example configuration here
