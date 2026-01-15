@@ -367,7 +367,7 @@ func (r *NamespaceResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.endpoint, envKey, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces", r.endpoint, envKey)
 	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))

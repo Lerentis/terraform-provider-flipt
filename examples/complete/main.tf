@@ -39,7 +39,7 @@ resource "flipt_namespace" "production" {
   environment_key = "local" # Explicitly set the environment
   key             = "production"
   name            = "Production Environment"
-  description     = "Namespace for production feature flags"
+  description     = "Namespace for production feature flags part two"
 }
 
 # Read namespace data source (after creation)
