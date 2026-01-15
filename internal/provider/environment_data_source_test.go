@@ -31,7 +31,7 @@ func TestAccEnvironmentDataSource(t *testing.T) {
 func testAccEnvironmentDataSourceConfig(key string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 data "flipt_environment" "test" {

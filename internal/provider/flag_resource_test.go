@@ -44,7 +44,7 @@ func TestAccFlagResource(t *testing.T) {
 func testAccFlagResourceConfig(envKey, namespaceKey, key, name string, enabled bool, flagType string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 resource "flipt_namespace" "test" {

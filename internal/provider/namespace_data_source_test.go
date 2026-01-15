@@ -32,7 +32,7 @@ func TestAccNamespaceDataSource(t *testing.T) {
 func testAccNamespaceDataSourceConfig(envKey, key string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 resource "flipt_namespace" "test" {

@@ -44,7 +44,7 @@ func TestAccConstraintResource(t *testing.T) {
 func testAccConstraintResourceConfig(envKey, namespaceKey, segmentKey, property, constraintType, operator, value string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 resource "flipt_namespace" "test" {

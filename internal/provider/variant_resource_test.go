@@ -42,7 +42,7 @@ func TestAccVariantResource(t *testing.T) {
 func testAccVariantResourceConfig(envKey, namespaceKey, flagKey, key, name string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 resource "flipt_namespace" "test" {

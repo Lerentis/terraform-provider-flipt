@@ -43,7 +43,7 @@ func TestAccSegmentResource(t *testing.T) {
 func testAccSegmentResourceConfig(envKey, namespaceKey, key, name, matchType string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 resource "flipt_namespace" "test" {

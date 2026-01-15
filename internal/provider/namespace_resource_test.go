@@ -19,9 +19,9 @@ func TestAccNamespaceResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccNamespaceResourceConfig("local", "test-namespace", "Test Namespace", "Test description"),
+				Config: testAccNamespaceResourceConfig("default", "test-namespace", "Test Namespace", "Test description"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("flipt_namespace.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("flipt_namespace.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("flipt_namespace.test", "key", "test-namespace"),
 					resource.TestCheckResourceAttr("flipt_namespace.test", "name", "Test Namespace"),
 					resource.TestCheckResourceAttr("flipt_namespace.test", "description", "Test description"),
@@ -29,7 +29,7 @@ func TestAccNamespaceResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccNamespaceResourceConfig("local", "test-namespace", "Updated Namespace", "Updated description"),
+				Config: testAccNamespaceResourceConfig("default", "test-namespace", "Updated Namespace", "Updated description"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("flipt_namespace.test", "name", "Updated Namespace"),
 					resource.TestCheckResourceAttr("flipt_namespace.test", "description", "Updated description"),
@@ -43,7 +43,7 @@ func TestAccNamespaceResource(t *testing.T) {
 func testAccNamespaceResourceConfig(envKey, key, name, description string) string {
 	return `
 provider "flipt" {
-  endpoint = "http://localhost:8080"
+  endpoint = "` + getTestFliptEndpoint() + `"
 }
 
 resource "flipt_namespace" "test" {
