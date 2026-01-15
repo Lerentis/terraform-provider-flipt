@@ -19,9 +19,9 @@ func TestAccFlagResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccFlagResourceConfig("local", "test-namespace", "test-flag", "Test Flag", true, "VARIANT_FLAG_TYPE"),
+				Config: testAccFlagResourceConfig("default", "test-namespace", "test-flag", "Test Flag", true, "VARIANT_FLAG_TYPE"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("flipt_flag.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("flipt_flag.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("flipt_flag.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("flipt_flag.test", "key", "test-flag"),
 					resource.TestCheckResourceAttr("flipt_flag.test", "name", "Test Flag"),
@@ -31,7 +31,7 @@ func TestAccFlagResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccFlagResourceConfig("local", "test-namespace", "test-flag", "Updated Flag", false, "VARIANT_FLAG_TYPE"),
+				Config: testAccFlagResourceConfig("default", "test-namespace", "test-flag", "Updated Flag", false, "VARIANT_FLAG_TYPE"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("flipt_flag.test", "name", "Updated Flag"),
 					resource.TestCheckResourceAttr("flipt_flag.test", "enabled", "false"),

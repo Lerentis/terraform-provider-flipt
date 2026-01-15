@@ -18,9 +18,9 @@ func TestAccFlagDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccFlagDataSourceConfig("local", "test-namespace", "test-flag"),
+				Config: testAccFlagDataSourceConfig("default", "test-namespace", "test-flag"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.flipt_flag.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("data.flipt_flag.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("data.flipt_flag.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("data.flipt_flag.test", "key", "test-flag"),
 					resource.TestCheckResourceAttrSet("data.flipt_flag.test", "name"),

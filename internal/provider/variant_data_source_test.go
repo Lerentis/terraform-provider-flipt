@@ -18,9 +18,9 @@ func TestAccVariantDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccVariantDataSourceConfig("local", "test-namespace", "test-flag", "test-variant"),
+				Config: testAccVariantDataSourceConfig("default", "test-namespace", "test-flag", "test-variant"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.flipt_variant.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("data.flipt_variant.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("data.flipt_variant.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("data.flipt_variant.test", "flag_key", "test-flag"),
 					resource.TestCheckResourceAttr("data.flipt_variant.test", "key", "test-variant"),

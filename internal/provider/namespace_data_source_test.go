@@ -18,9 +18,9 @@ func TestAccNamespaceDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccNamespaceDataSourceConfig("local", "test-namespace"),
+				Config: testAccNamespaceDataSourceConfig("default", "test-namespace"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.flipt_namespace.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("data.flipt_namespace.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("data.flipt_namespace.test", "key", "test-namespace"),
 					resource.TestCheckResourceAttrSet("data.flipt_namespace.test", "name"),
 				),

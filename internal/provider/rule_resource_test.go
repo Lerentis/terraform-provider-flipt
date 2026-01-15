@@ -19,9 +19,9 @@ func TestAccRuleResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccRuleResourceConfig("local", "test-namespace", "test-flag", "test-segment", "OR_SEGMENT_OPERATOR"),
+				Config: testAccRuleResourceConfig("default", "test-namespace", "test-flag", "test-segment", "OR_SEGMENT_OPERATOR"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("flipt_rule.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("flipt_rule.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("flipt_rule.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("flipt_rule.test", "flag_key", "test-flag"),
 					resource.TestCheckResourceAttr("flipt_rule.test", "segment_operator", "OR_SEGMENT_OPERATOR"),
@@ -29,7 +29,7 @@ func TestAccRuleResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccRuleResourceConfig("local", "test-namespace", "test-flag", "test-segment", "AND_SEGMENT_OPERATOR"),
+				Config: testAccRuleResourceConfig("default", "test-namespace", "test-flag", "test-segment", "AND_SEGMENT_OPERATOR"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("flipt_rule.test", "segment_operator", "AND_SEGMENT_OPERATOR"),
 				),

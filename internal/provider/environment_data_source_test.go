@@ -18,9 +18,9 @@ func TestAccEnvironmentDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccEnvironmentDataSourceConfig("local"),
+				Config: testAccEnvironmentDataSourceConfig("default"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.flipt_environment.test", "key", "local"),
+					resource.TestCheckResourceAttr("data.flipt_environment.test", "key", "default"),
 					resource.TestCheckResourceAttrSet("data.flipt_environment.test", "name"),
 				),
 			},

@@ -18,9 +18,9 @@ func TestAccSegmentDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccSegmentDataSourceConfig("local", "test-namespace", "test-segment"),
+				Config: testAccSegmentDataSourceConfig("default", "test-namespace", "test-segment"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.flipt_segment.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("data.flipt_segment.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("data.flipt_segment.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("data.flipt_segment.test", "key", "test-segment"),
 					resource.TestCheckResourceAttrSet("data.flipt_segment.test", "name"),

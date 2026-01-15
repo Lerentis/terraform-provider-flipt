@@ -19,9 +19,9 @@ func TestAccConstraintResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccConstraintResourceConfig("local", "test-namespace", "test-segment", "email", "STRING_COMPARISON_TYPE", "suffix", "@test.com"),
+				Config: testAccConstraintResourceConfig("default", "test-namespace", "test-segment", "email", "STRING_COMPARISON_TYPE", "suffix", "@test.com"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("flipt_constraint.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("flipt_constraint.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("flipt_constraint.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("flipt_constraint.test", "segment_key", "test-segment"),
 					resource.TestCheckResourceAttr("flipt_constraint.test", "property", "email"),
@@ -32,7 +32,7 @@ func TestAccConstraintResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccConstraintResourceConfig("local", "test-namespace", "test-segment", "email", "STRING_COMPARISON_TYPE", "suffix", "@updated.com"),
+				Config: testAccConstraintResourceConfig("default", "test-namespace", "test-segment", "email", "STRING_COMPARISON_TYPE", "suffix", "@updated.com"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("flipt_constraint.test", "value", "@updated.com"),
 				),

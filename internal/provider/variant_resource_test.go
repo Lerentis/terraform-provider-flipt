@@ -19,9 +19,9 @@ func TestAccVariantResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccVariantResourceConfig("local", "test-namespace", "test-flag", "test-variant", "Test Variant"),
+				Config: testAccVariantResourceConfig("default", "test-namespace", "test-flag", "test-variant", "Test Variant"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("flipt_variant.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("flipt_variant.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("flipt_variant.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("flipt_variant.test", "flag_key", "test-flag"),
 					resource.TestCheckResourceAttr("flipt_variant.test", "key", "test-variant"),
@@ -30,7 +30,7 @@ func TestAccVariantResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccVariantResourceConfig("local", "test-namespace", "test-flag", "test-variant", "Updated Variant"),
+				Config: testAccVariantResourceConfig("default", "test-namespace", "test-flag", "test-variant", "Updated Variant"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("flipt_variant.test", "name", "Updated Variant"),
 				),

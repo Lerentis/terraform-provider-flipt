@@ -19,9 +19,9 @@ func TestAccSegmentResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccSegmentResourceConfig("local", "test-namespace", "test-segment", "Test Segment", "ALL_MATCH_TYPE"),
+				Config: testAccSegmentResourceConfig("default", "test-namespace", "test-segment", "Test Segment", "ALL_MATCH_TYPE"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("flipt_segment.test", "environment_key", "local"),
+					resource.TestCheckResourceAttr("flipt_segment.test", "environment_key", "default"),
 					resource.TestCheckResourceAttr("flipt_segment.test", "namespace_key", "test-namespace"),
 					resource.TestCheckResourceAttr("flipt_segment.test", "key", "test-segment"),
 					resource.TestCheckResourceAttr("flipt_segment.test", "name", "Test Segment"),
@@ -30,7 +30,7 @@ func TestAccSegmentResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccSegmentResourceConfig("local", "test-namespace", "test-segment", "Updated Segment", "ANY_MATCH_TYPE"),
+				Config: testAccSegmentResourceConfig("default", "test-namespace", "test-segment", "Updated Segment", "ANY_MATCH_TYPE"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("flipt_segment.test", "name", "Updated Segment"),
 					resource.TestCheckResourceAttr("flipt_segment.test", "match_type", "ANY_MATCH_TYPE"),
