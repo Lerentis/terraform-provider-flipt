@@ -270,6 +270,9 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 
 	// Set computed values
+	data.EnvironmentKey = types.StringValue(envKey)
+	// Generate a stable ID based on flag_key and rank (rank is more stable than operator)
+	ruleID = fmt.Sprintf("%s/%d", data.FlagKey.ValueString(), rank)
 	data.ID = types.StringValue(ruleID)
 	data.SegmentOperator = types.StringValue(segmentOperator)
 	data.Rank = types.Int64Value(rank)
@@ -349,10 +352,44 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	// Find the rule by ID
+	tflog.Debug(ctx, "Flag response received", map[string]interface{}{
+		"rules_count":    len(flagResponse.Resource.Payload.Rules),
+		"looking_for_id": data.ID.ValueString(),
+	})
+
+	// Find the rule by matching segments, operator, and rank since Flipt doesn't preserve rule IDs
 	var found bool
 	for _, rule := range flagResponse.Resource.Payload.Rules {
-		if rule.ID == data.ID.ValueString() {
+		tflog.Debug(ctx, "Checking rule", map[string]interface{}{
+			"rule_id":           rule.ID,
+			"rule_segments":     rule.Segments,
+			"rule_operator":     rule.SegmentOperator,
+			"rule_rank":         rule.Rank,
+			"expected_operator": data.SegmentOperator.ValueString(),
+			"expected_rank":     data.Rank.ValueInt64(),
+		})
+
+		// Match by segments, operator, and rank since Flipt doesn't preserve IDs
+		var expectedSegments []string
+		resp.Diagnostics.Append(data.SegmentKeys.ElementsAs(ctx, &expectedSegments, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// Check if segments match
+		segmentsMatch := len(rule.Segments) == len(expectedSegments)
+		if segmentsMatch {
+			for i, seg := range rule.Segments {
+				if i >= len(expectedSegments) || seg != expectedSegments[i] {
+					segmentsMatch = false
+					break
+				}
+			}
+		}
+
+		if segmentsMatch &&
+			rule.SegmentOperator == data.SegmentOperator.ValueString() &&
+			rule.Rank == data.Rank.ValueInt64() {
 			found = true
 
 			// Convert segments to types.List
@@ -365,14 +402,27 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 			data.SegmentOperator = types.StringValue(rule.SegmentOperator)
 			data.Rank = types.Int64Value(rule.Rank)
+
+			// Generate a stable ID based on rule attributes if not already set
+			if data.ID.IsNull() || data.ID.ValueString() == "" {
+				ruleID := fmt.Sprintf("%s/%d", data.FlagKey.ValueString(), rule.Rank)
+				data.ID = types.StringValue(ruleID)
+			}
 			break
 		}
 	}
 
 	if !found {
+		tflog.Warn(ctx, "Rule not found in flag, removing from state", map[string]interface{}{
+			"rule_id":  data.ID.ValueString(),
+			"flag_key": data.FlagKey.ValueString(),
+		})
 		resp.State.RemoveResource(ctx)
 		return
 	}
+
+	// Ensure EnvironmentKey is set in state
+	data.EnvironmentKey = types.StringValue(envKey)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -380,6 +430,13 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data RuleResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Get the current state to know which rule to update
+	var state RuleResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -394,7 +451,8 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		"environment_key": envKey,
 		"namespace_key":   data.NamespaceKey.ValueString(),
 		"flag_key":        data.FlagKey.ValueString(),
-		"rule_id":         data.ID.ValueString(),
+		"old_state_id":    state.ID.ValueString(),
+		"new_plan_values": fmt.Sprintf("operator=%s rank=%d", data.SegmentOperator.ValueString(), data.Rank.ValueInt64()),
 	})
 
 	// Get the current flag to read existing rules
@@ -449,7 +507,14 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	// Find and update the rule in the rules array
+	// Extract old segment keys from state to find the rule
+	var oldSegmentKeys []string
+	resp.Diagnostics.Append(state.SegmentKeys.ElementsAs(ctx, &oldSegmentKeys, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Find and update the rule in the rules array by matching old state values
 	var found bool
 	existingRules := flagResponse.Resource.Payload.Rules
 	if existingRules == nil {
@@ -457,7 +522,27 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	for i, rule := range existingRules {
-		if id, ok := rule["id"].(string); ok && id == data.ID.ValueString() {
+		// Match by old state values (operator and rank) to find the rule to update
+		ruleSegments, _ := rule["segments"].([]interface{})
+		ruleOperator, _ := rule["segmentOperator"].(string)
+		ruleRank, _ := rule["rank"].(float64)
+
+		// Check if this rule matches the old state
+		segmentsMatch := len(ruleSegments) == len(oldSegmentKeys)
+		if segmentsMatch {
+			for j, seg := range ruleSegments {
+				if segStr, ok := seg.(string); ok && j < len(oldSegmentKeys) {
+					if segStr != oldSegmentKeys[j] {
+						segmentsMatch = false
+						break
+					}
+				}
+			}
+		}
+
+		if segmentsMatch &&
+			ruleOperator == state.SegmentOperator.ValueString() &&
+			int64(ruleRank) == state.Rank.ValueInt64() {
 			found = true
 
 			// Preserve distributions if they exist
@@ -466,9 +551,8 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 				distributions = []interface{}{}
 			}
 
-			// Update the rule
+			// Update the rule with new values
 			existingRules[i] = map[string]interface{}{
-				"id":              data.ID.ValueString(),
 				"segments":        segmentKeys,
 				"segmentOperator": data.SegmentOperator.ValueString(),
 				"rank":            data.Rank.ValueInt64(),
@@ -479,7 +563,8 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	if !found {
-		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Rule with ID %s not found in flag", data.ID.ValueString()))
+		resp.Diagnostics.AddError("Not Found", fmt.Sprintf("Rule with state ID %s not found in flag (operator=%s, rank=%d)",
+			state.ID.ValueString(), state.SegmentOperator.ValueString(), state.Rank.ValueInt64()))
 		return
 	}
 
@@ -528,6 +613,11 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		resp.Diagnostics.AddError("API Error", fmt.Sprintf("Unable to update rule, status: %d, body: %s", httpResp.StatusCode, string(body)))
 		return
 	}
+
+	// Ensure EnvironmentKey is set in state
+	data.EnvironmentKey = types.StringValue(envKey)
+
+	// ID remains stable based on flag_key and rank (don't change it)
 
 	tflog.Trace(ctx, "updated a rule resource")
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
