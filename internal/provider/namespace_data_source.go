@@ -23,8 +23,7 @@ func NewNamespaceDataSource() datasource.DataSource {
 }
 
 type NamespaceDataSource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type NamespaceDataSourceModel struct {
@@ -83,8 +82,7 @@ func (d *NamespaceDataSource) Configure(ctx context.Context, req datasource.Conf
 		return
 	}
 
-	d.httpClient = providerConfig.HTTPClient
-	d.endpoint = providerConfig.Endpoint
+	d.config = providerConfig
 }
 
 func (d *NamespaceDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
@@ -108,14 +106,15 @@ func (d *NamespaceDataSource) Read(ctx context.Context, req datasource.ReadReque
 	})
 
 	// Get the namespace from Flipt
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", d.endpoint, envKey, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", d.config.Endpoint, envKey, data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 
-	httpResp, err := d.httpClient.Do(httpReq)
+	d.config.AddAuthHeader(httpReq)
+	httpResp, err := d.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read namespace, got error: %s", err))
 		return

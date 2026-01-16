@@ -23,8 +23,7 @@ func NewVariantDataSource() datasource.DataSource {
 }
 
 type VariantDataSource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type VariantDataSourceModel struct {
@@ -100,8 +99,7 @@ func (d *VariantDataSource) Configure(ctx context.Context, req datasource.Config
 		return
 	}
 
-	d.httpClient = providerConfig.HTTPClient
-	d.endpoint = providerConfig.Endpoint
+	d.config = providerConfig
 }
 
 func (d *VariantDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
@@ -126,7 +124,7 @@ func (d *VariantDataSource) Read(ctx context.Context, req datasource.ReadRequest
 
 	// Get the flag to read its variants
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		d.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		d.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -134,7 +132,8 @@ func (d *VariantDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	httpResp, err := d.httpClient.Do(httpReq)
+	d.config.AddAuthHeader(httpReq)
+	httpResp, err := d.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
 		return

@@ -28,8 +28,7 @@ func NewConstraintResource() resource.Resource {
 }
 
 type ConstraintResource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type ConstraintResourceModel struct {
@@ -116,8 +115,7 @@ func (r *ConstraintResource) Configure(ctx context.Context, req resource.Configu
 		return
 	}
 
-	r.httpClient = providerConfig.HTTPClient
-	r.endpoint = providerConfig.Endpoint
+	r.config = providerConfig
 }
 
 func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -142,7 +140,7 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 
 	// First, get the current segment to read existing constraints
 	segmentURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 	if err != nil {
@@ -150,7 +148,8 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
 		return
@@ -223,7 +222,7 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -231,7 +230,8 @@ func (r *ConstraintResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create constraint, got error: %s", err))
 		return
@@ -277,7 +277,7 @@ func (r *ConstraintResource) Read(ctx context.Context, req resource.ReadRequest,
 
 	// Get the segment to read its constraints
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -285,7 +285,8 @@ func (r *ConstraintResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
@@ -376,7 +377,7 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	// Get the current segment to read existing constraints
 	segmentURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 	if err != nil {
@@ -384,7 +385,8 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
 		return
@@ -468,7 +470,7 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -476,7 +478,8 @@ func (r *ConstraintResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update constraint, got error: %s", err))
 		return
@@ -516,7 +519,7 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 	// Get the current segment to read existing constraints
 	segmentURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.SegmentKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", segmentURL, nil)
 	if err != nil {
@@ -524,7 +527,8 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		// If segment doesn't exist, constraint is already gone
 		return
@@ -595,7 +599,7 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -603,7 +607,8 @@ func (r *ConstraintResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete constraint, got error: %s", err))
 		return

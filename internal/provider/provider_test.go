@@ -260,3 +260,59 @@ func TestMain(m *testing.M) {
 
 	os.Exit(code)
 }
+
+func TestFliptProviderConfig_AddAuthHeader(t *testing.T) {
+	tests := []struct {
+		name           string
+		config         *FliptProviderConfig
+		expectedHeader string
+		expectAuth     bool
+	}{
+		{
+			name: "Bearer token authentication",
+			config: &FliptProviderConfig{
+				Token: "test-token",
+			},
+			expectedHeader: "Bearer test-token",
+			expectAuth:     true,
+		},
+		{
+			name: "JWT authentication",
+			config: &FliptProviderConfig{
+				JWT: "test.jwt.token",
+			},
+			expectedHeader: "JWT test.jwt.token",
+			expectAuth:     true,
+		},
+		{
+			name:       "No authentication",
+			config:     &FliptProviderConfig{},
+			expectAuth: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", "http://example.com", nil)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+
+			tt.config.AddAuthHeader(req)
+
+			authHeader := req.Header.Get("Authorization")
+			if tt.expectAuth {
+				if authHeader == "" {
+					t.Error("Expected Authorization header to be set, but it was empty")
+				}
+				if authHeader != tt.expectedHeader {
+					t.Errorf("Expected Authorization header to be %q, got %q", tt.expectedHeader, authHeader)
+				}
+			} else {
+				if authHeader != "" {
+					t.Errorf("Expected no Authorization header, but got %q", authHeader)
+				}
+			}
+		})
+	}
+}

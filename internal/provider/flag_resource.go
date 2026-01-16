@@ -30,8 +30,7 @@ func NewFlagResource() resource.Resource {
 }
 
 type FlagResource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type FlagResourceModel struct {
@@ -120,8 +119,7 @@ func (r *FlagResource) Configure(ctx context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	r.httpClient = providerConfig.HTTPClient
-	r.endpoint = providerConfig.Endpoint
+	r.config = providerConfig
 }
 
 func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -188,15 +186,16 @@ func (r *FlagResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	r.config.AddAuthHeader(httpReq)
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create flag, got error: %s", err))
 		return
@@ -285,14 +284,15 @@ func (r *FlagResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	})
 
 	// GET URL includes flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
+	r.config.AddAuthHeader(httpReq)
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
@@ -433,15 +433,16 @@ func (r *FlagResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 
 	// PUT URL doesn't include the flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	r.config.AddAuthHeader(httpReq)
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update flag, got error: %s", err))
 		return
@@ -538,14 +539,15 @@ func (r *FlagResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	})
 
 	// DELETE URL includes flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
+	r.config.AddAuthHeader(httpReq)
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete flag, got error: %s", err))
 		return

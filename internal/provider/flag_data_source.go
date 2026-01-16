@@ -23,8 +23,7 @@ func NewFlagDataSource() datasource.DataSource {
 }
 
 type FlagDataSource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type FlagDataSourceModel struct {
@@ -99,8 +98,7 @@ func (d *FlagDataSource) Configure(ctx context.Context, req datasource.Configure
 		return
 	}
 
-	d.httpClient = providerConfig.HTTPClient
-	d.endpoint = providerConfig.Endpoint
+	d.config = providerConfig
 }
 
 func (d *FlagDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
@@ -124,14 +122,15 @@ func (d *FlagDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	})
 
 	// GET URL includes flipt.core.Flag prefix
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", d.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s", d.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 
-	httpResp, err := d.httpClient.Do(httpReq)
+	d.config.AddAuthHeader(httpReq)
+	httpResp, err := d.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
 		return

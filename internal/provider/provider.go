@@ -28,12 +28,25 @@ type FliptProvider struct {
 // FliptProviderModel describes the provider data model.
 type FliptProviderModel struct {
 	Endpoint types.String `tfsdk:"endpoint"`
+	Token    types.String `tfsdk:"token"`
+	JWT      types.String `tfsdk:"jwt"`
 }
 
 // FliptProviderConfig holds the configured HTTP client and endpoint for resources.
 type FliptProviderConfig struct {
 	HTTPClient *http.Client
 	Endpoint   string
+	Token      string
+	JWT        string
+}
+
+// AddAuthHeader adds the appropriate authentication header to an HTTP request.
+func (c *FliptProviderConfig) AddAuthHeader(req *http.Request) {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	} else if c.JWT != "" {
+		req.Header.Set("Authorization", "JWT "+c.JWT)
+	}
 }
 
 func (p *FliptProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -47,6 +60,16 @@ func (p *FliptProvider) Schema(ctx context.Context, req provider.SchemaRequest, 
 			"endpoint": schema.StringAttribute{
 				MarkdownDescription: "Flipt server endpoint URL",
 				Required:            true,
+			},
+			"token": schema.StringAttribute{
+				MarkdownDescription: "Static authentication token for Bearer authentication",
+				Optional:            true,
+				Sensitive:           true,
+			},
+			"jwt": schema.StringAttribute{
+				MarkdownDescription: "JWT token for JWT authentication",
+				Optional:            true,
+				Sensitive:           true,
 			},
 		},
 	}
@@ -73,6 +96,26 @@ func (p *FliptProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	// Use the base endpoint without environment path
 	endpoint := data.Endpoint.ValueString()
 
+	// Get authentication tokens
+	token := ""
+	if !data.Token.IsNull() {
+		token = data.Token.ValueString()
+	}
+
+	jwt := ""
+	if !data.JWT.IsNull() {
+		jwt = data.JWT.ValueString()
+	}
+
+	// Validate that only one authentication method is provided
+	if token != "" && jwt != "" {
+		resp.Diagnostics.AddError(
+			"Conflicting Authentication",
+			"Both token and jwt are configured. Please provide only one authentication method.",
+		)
+		return
+	}
+
 	// Create HTTP client
 	httpClient := &http.Client{}
 
@@ -80,6 +123,8 @@ func (p *FliptProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	config := &FliptProviderConfig{
 		HTTPClient: httpClient,
 		Endpoint:   endpoint,
+		Token:      token,
+		JWT:        jwt,
 	}
 
 	resp.DataSourceData = config

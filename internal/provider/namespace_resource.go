@@ -30,8 +30,7 @@ func NewNamespaceResource() resource.Resource {
 
 // NamespaceResource defines the resource implementation.
 type NamespaceResource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 // NamespaceResourceModel describes the resource data model.
@@ -102,8 +101,7 @@ func (r *NamespaceResource) Configure(ctx context.Context, req resource.Configur
 		return
 	}
 
-	r.httpClient = providerConfig.HTTPClient
-	r.endpoint = providerConfig.Endpoint
+	r.config = providerConfig
 }
 
 func (r *NamespaceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -145,7 +143,7 @@ func (r *NamespaceResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces", r.endpoint, envKey)
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces", r.config.Endpoint, envKey)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -160,7 +158,8 @@ func (r *NamespaceResource) Create(ctx context.Context, req resource.CreateReque
 		"key":             data.Key.ValueString(),
 	})
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		tflog.Error(ctx, "Failed to create namespace", map[string]interface{}{
 			"error":           err.Error(),
@@ -264,14 +263,15 @@ func (r *NamespaceResource) Read(ctx context.Context, req resource.ReadRequest, 
 	})
 
 	// Get the namespace from Flipt
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.endpoint, envKey, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.config.Endpoint, envKey, data.Key.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		tflog.Warn(ctx, "Namespace not found, removing from state", map[string]interface{}{
 			"error":           err.Error(),
@@ -367,7 +367,7 @@ func (r *NamespaceResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces", r.endpoint, envKey)
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces", r.config.Endpoint, envKey)
 	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -375,7 +375,8 @@ func (r *NamespaceResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		tflog.Error(ctx, "Failed to update namespace", map[string]interface{}{
 			"error":           err.Error(),
@@ -466,12 +467,12 @@ func (r *NamespaceResource) Delete(ctx context.Context, req resource.DeleteReque
 	})
 
 	// Delete the namespace
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.endpoint, envKey, data.Key.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s", r.config.Endpoint, envKey, data.Key.ValueString())
 
 	tflog.Debug(ctx, "Making DELETE request", map[string]interface{}{
 		"method":          "DELETE",
 		"url":             url,
-		"endpoint":        r.endpoint,
+		"endpoint":        r.config.Endpoint,
 		"environment_key": envKey,
 		"key":             data.Key.ValueString(),
 	})
@@ -489,7 +490,8 @@ func (r *NamespaceResource) Delete(ctx context.Context, req resource.DeleteReque
 		"header": fmt.Sprintf("%v", httpReq.Header),
 	})
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		tflog.Error(ctx, "Failed to delete namespace", map[string]interface{}{
 			"error":           err.Error(),

@@ -45,3 +45,16 @@ metrics:
 ui:
   enabled: true
   default_theme: system
+authentication:
+  required: true
+  exclude:
+    evaluation: true
+  methods:
+    token:
+      enabled: true
+      storage:
+        tokens:
+          "some_token_id":
+            credential: "some_token_credential"
+            metadata:
+              some_key: "some_value"

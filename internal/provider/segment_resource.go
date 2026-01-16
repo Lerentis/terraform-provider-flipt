@@ -29,8 +29,7 @@ func NewSegmentResource() resource.Resource {
 }
 
 type SegmentResource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type SegmentResourceModel struct {
@@ -106,8 +105,7 @@ func (r *SegmentResource) Configure(ctx context.Context, req resource.ConfigureR
 		return
 	}
 
-	r.httpClient = providerConfig.HTTPClient
-	r.endpoint = providerConfig.Endpoint
+	r.config = providerConfig
 }
 
 func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -155,7 +153,7 @@ func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -163,7 +161,8 @@ func (r *SegmentResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create segment, got error: %s", err))
 		return
@@ -200,7 +199,7 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 	})
 
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -208,7 +207,8 @@ func (r *SegmentResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
@@ -281,7 +281,7 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 
 	// Get current segment to preserve constraints
 	getURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", getURL, nil)
 	if err != nil {
@@ -289,7 +289,8 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
 		return
@@ -341,7 +342,7 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -349,7 +350,8 @@ func (r *SegmentResource) Update(ctx context.Context, req resource.UpdateRequest
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update segment, got error: %s", err))
 		return
@@ -385,7 +387,7 @@ func (r *SegmentResource) Delete(ctx context.Context, req resource.DeleteRequest
 	})
 
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
@@ -394,7 +396,8 @@ func (r *SegmentResource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete segment, got error: %s", err))
 		return

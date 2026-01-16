@@ -23,8 +23,7 @@ func NewSegmentDataSource() datasource.DataSource {
 }
 
 type SegmentDataSource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type SegmentDataSourceModel struct {
@@ -94,8 +93,7 @@ func (d *SegmentDataSource) Configure(ctx context.Context, req datasource.Config
 		return
 	}
 
-	d.httpClient = providerConfig.HTTPClient
-	d.endpoint = providerConfig.Endpoint
+	d.config = providerConfig
 }
 
 func (d *SegmentDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
@@ -118,7 +116,7 @@ func (d *SegmentDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	})
 
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Segment/%s",
-		d.endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
+		d.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.Key.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -126,7 +124,8 @@ func (d *SegmentDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	httpResp, err := d.httpClient.Do(httpReq)
+	d.config.AddAuthHeader(httpReq)
+	httpResp, err := d.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read segment, got error: %s", err))
 		return

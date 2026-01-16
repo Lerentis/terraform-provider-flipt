@@ -25,8 +25,7 @@ var _ resource.Resource = &RuleResource{}
 var _ resource.ResourceWithImportState = &RuleResource{}
 
 type RuleResource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 func NewRuleResource() resource.Resource {
@@ -115,8 +114,7 @@ func (r *RuleResource) Configure(ctx context.Context, req resource.ConfigureRequ
 		return
 	}
 
-	r.httpClient = providerConfig.HTTPClient
-	r.endpoint = providerConfig.Endpoint
+	r.config = providerConfig
 }
 
 func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -140,7 +138,7 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	// First, get the current flag to read existing rules
 	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -148,7 +146,8 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
 		return
@@ -248,7 +247,7 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -256,7 +255,8 @@ func (r *RuleResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create rule, got error: %s", err))
 		return
@@ -303,7 +303,7 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	// Get the flag to read its rules
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -311,7 +311,8 @@ func (r *RuleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
@@ -457,7 +458,7 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 	// Get the current flag to read existing rules
 	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -465,7 +466,8 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
 		return
@@ -593,7 +595,7 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -601,7 +603,8 @@ func (r *RuleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update rule, got error: %s", err))
 		return
@@ -645,7 +648,7 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 
 	// Get the current flag to read existing rules
 	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -653,7 +656,8 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		// If flag doesn't exist, rule is already gone
 		return
@@ -732,7 +736,7 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -740,7 +744,8 @@ func (r *RuleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete rule, got error: %s", err))
 		return

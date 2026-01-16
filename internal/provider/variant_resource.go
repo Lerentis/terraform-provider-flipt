@@ -28,8 +28,7 @@ func NewVariantResource() resource.Resource {
 }
 
 type VariantResource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type VariantResourceModel struct {
@@ -111,8 +110,7 @@ func (r *VariantResource) Configure(ctx context.Context, req resource.ConfigureR
 		return
 	}
 
-	r.httpClient = providerConfig.HTTPClient
-	r.endpoint = providerConfig.Endpoint
+	r.config = providerConfig
 }
 
 func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -137,7 +135,7 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 
 	// First, get the current flag to read existing variants
 	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -145,7 +143,8 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
 		return
@@ -238,7 +237,7 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -246,7 +245,8 @@ func (r *VariantResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create variant, got error: %s", err))
 		return
@@ -292,7 +292,7 @@ func (r *VariantResource) Read(ctx context.Context, req resource.ReadRequest, re
 
 	// Get the flag to read its variants
 	url := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -300,7 +300,8 @@ func (r *VariantResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
@@ -403,7 +404,7 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 
 	// Get the current flag to read existing variants
 	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -411,7 +412,8 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read flag, got error: %s", err))
 		return
@@ -511,7 +513,7 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -519,7 +521,8 @@ func (r *VariantResource) Update(ctx context.Context, req resource.UpdateRequest
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update variant, got error: %s", err))
 		return
@@ -557,7 +560,7 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 
 	// Get the current flag to read existing variants
 	flagURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources/flipt.core.Flag/%s",
-		r.endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
+		r.config.Endpoint, envKey, data.NamespaceKey.ValueString(), data.FlagKey.ValueString())
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", flagURL, nil)
 	if err != nil {
@@ -565,7 +568,8 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	httpResp, err := r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err := r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		// If flag doesn't exist, variant is already gone
 		return
@@ -634,7 +638,7 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.endpoint, envKey, data.NamespaceKey.ValueString())
+	updateURL := fmt.Sprintf("%s/api/v2/environments/%s/namespaces/%s/resources", r.config.Endpoint, envKey, data.NamespaceKey.ValueString())
 	httpReq, err = http.NewRequestWithContext(ctx, "PUT", updateURL, bytes.NewReader(reqBody))
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
@@ -642,7 +646,8 @@ func (r *VariantResource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err = r.httpClient.Do(httpReq)
+	r.config.AddAuthHeader(httpReq)
+	httpResp, err = r.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete variant, got error: %s", err))
 		return

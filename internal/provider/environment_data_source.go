@@ -23,8 +23,7 @@ func NewEnvironmentDataSource() datasource.DataSource {
 }
 
 type EnvironmentDataSource struct {
-	httpClient *http.Client
-	endpoint   string
+	config *FliptProviderConfig
 }
 
 type EnvironmentDataSourceModel struct {
@@ -73,8 +72,7 @@ func (d *EnvironmentDataSource) Configure(ctx context.Context, req datasource.Co
 		return
 	}
 
-	d.httpClient = providerConfig.HTTPClient
-	d.endpoint = providerConfig.Endpoint
+	d.config = providerConfig
 }
 
 func (d *EnvironmentDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
@@ -90,14 +88,15 @@ func (d *EnvironmentDataSource) Read(ctx context.Context, req datasource.ReadReq
 	})
 
 	// List all environments and find the requested one
-	url := fmt.Sprintf("%s/api/v2/environments", d.endpoint)
+	url := fmt.Sprintf("%s/api/v2/environments", d.config.Endpoint)
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Request Error", fmt.Sprintf("Unable to create request: %s", err))
 		return
 	}
 
-	httpResp, err := d.httpClient.Do(httpReq)
+	d.config.AddAuthHeader(httpReq)
+	httpResp, err := d.config.HTTPClient.Do(httpReq)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read environments, got error: %s", err))
 		return
